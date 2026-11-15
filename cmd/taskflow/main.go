@@ -9,7 +9,7 @@ func main() {
 	p := NewProject(1, " Website bán hàng ", 1)
 	p.Description = "Làm lại trang chủ và giỏ hàng"
 
-	// slice chứa con trỏ tới các task (Bài 9)
+	// slice chứa con trỏ: mọi thay đổi đều áp dụng lên task gốc
 	tasks := []*Task{
 		NewTask(1, p.ID, "  Thiết kế database"),
 		NewTask(2, p.ID, "Viết API giỏ hàng"),
@@ -19,6 +19,16 @@ func main() {
 	tasks[0].Complete()
 	tasks[1].Assign(2)
 	tasks[1].Start()
+
+	// tìm task theo id, nil nghĩa là không có task đó
+	for _, id := range []int{3, 9} {
+		t := FindTask(tasks, id)
+		if t == nil {
+			fmt.Printf("Không có task #%d\n", id)
+			continue
+		}
+		t.Assign(1)
+	}
 
 	fmt.Printf("Project #%d %q của user #%d\n", p.ID, p.Name, p.OwnerID)
 	done := 0

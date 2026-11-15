@@ -66,3 +66,13 @@ func (t *Task) Complete() {
 func (t *Task) IsDone() bool {
 	return t.Status == StatusDone
 }
+
+// FindTask trả về task có id cần tìm trong tasks, không thấy thì trả về nil.
+func FindTask(tasks []*Task, id int) *Task {
+	for _, t := range tasks {
+		if t.ID == id {
+			return t
+		}
+	}
+	return nil
+}
