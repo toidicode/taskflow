@@ -7,6 +7,9 @@ import (
 	"io/fs"
 	"os"
 	"time"
+
+	"github.com/toidicode/taskflow/internal/project"
+	"github.com/toidicode/taskflow/internal/task"
 )
 
 // dataFile là file JSON lưu task giữa các lần chạy.
@@ -15,13 +18,13 @@ const dataFile = "tasks.json"
 func main() {
 	fmt.Println("TaskFlow", version)
 
-	p := NewProject(1, " Website bán hàng ", 1)
+	p := project.New(1, " Website bán hàng ", 1)
 	p.Description = "Làm lại trang chủ và giỏ hàng"
 
 	// lấy thời điểm hiện tại một lần, dùng chung cho cả chương trình
 	now := time.Now()
 
-	store := NewMemoryTaskStore()
+	store := task.NewMemoryStore()
 	if err := loadOrSeed(store, p.ID, now); err != nil {
 		fmt.Println("Lỗi:", err)
 		os.Exit(1)
@@ -31,7 +34,7 @@ func main() {
 	for _, id := range []int{3, 9} {
 		t, err := store.Get(id)
 		switch {
-		case errors.Is(err, ErrNotFound):
+		case errors.Is(err, task.ErrNotFound):
 			fmt.Println("Bỏ qua:", err)
 		case err != nil:
 			fmt.Println("Lỗi:", err)
@@ -50,7 +53,7 @@ func main() {
 }
 
 // loadOrSeed đọc task từ dataFile, lần chạy đầu chưa có file thì tạo task mẫu.
-func loadOrSeed(store *MemoryTaskStore, projectID int, now time.Time) error {
+func loadOrSeed(store *task.MemoryStore, projectID int, now time.Time) error {
 	err := store.Load(dataFile)
 	if errors.Is(err, fs.ErrNotExist) {
 		fmt.Println("Chưa có", dataFile+", tạo task mẫu")
@@ -64,11 +67,11 @@ func loadOrSeed(store *MemoryTaskStore, projectID int, now time.Time) error {
 }
 
 // seedTasks thêm vài task mẫu của project projectID vào store, hạn tính từ now.
-func seedTasks(store TaskStore, projectID int, now time.Time) error {
+func seedTasks(store task.Store, projectID int, now time.Time) error {
 	titles := []string{"  Thiết kế database", "Viết API giỏ hàng", "Viết tài liệu"}
-	tasks := make([]*Task, 0, len(titles))
+	tasks := make([]*task.Task, 0, len(titles))
 	for _, title := range titles {
-		t, err := NewTask(projectID, title)
+		t, err := task.New(projectID, title)
 		if err != nil {
 			return fmt.Errorf("tạo task mẫu: %w", err)
 		}
@@ -88,7 +91,7 @@ func seedTasks(store TaskStore, projectID int, now time.Time) error {
 }
 
 // printReport in các task trong store của project p, quá hạn tính tại thời điểm now.
-func printReport(store TaskStore, p *Project, now time.Time) {
+func printReport(store task.Store, p *project.Project, now time.Time) {
 	tasks := store.List()
 	fmt.Printf("Project #%d %q của user #%d\n", p.ID, p.Name, p.OwnerID)
 	done, overdue := 0, 0
@@ -105,7 +108,7 @@ func printReport(store TaskStore, p *Project, now time.Time) {
 }
 
 // dueText mô tả hạn của task t, VD "hạn 14/11/2026 (quá hạn)".
-func dueText(t *Task, now time.Time) string {
+func dueText(t *task.Task, now time.Time) string {
 	if t.DueDate.IsZero() {
 		return "không có hạn"
 	}

@@ -1,4 +1,5 @@
-package main
+// Package project quản lý các project của TaskFlow.
+package project
 
 import "strings"
 
@@ -10,8 +11,8 @@ type Project struct {
 	OwnerID     int
 }
 
-// NewProject tạo một project mới của người dùng ownerID.
-func NewProject(id int, name string, ownerID int) *Project {
+// New tạo một project mới của người dùng ownerID.
+func New(id int, name string, ownerID int) *Project {
 	return &Project{
 		ID:      id,
 		Name:    strings.TrimSpace(name),

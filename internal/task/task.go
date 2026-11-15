@@ -1,4 +1,5 @@
-package main
+// Package task chứa model Task và nơi lưu trữ task của TaskFlow.
+package task
 
 import (
 	"errors"
@@ -51,9 +52,9 @@ func (e *ValidationError) Error() string {
 	return e.Field + ": " + e.Message
 }
 
-// NewTask tạo một task mới ở trạng thái todo, ID do TaskStore cấp khi thêm task.
+// New tạo một task mới ở trạng thái todo, ID do Store cấp khi thêm task.
 // Dữ liệu không hợp lệ thì trả về các *ValidationError gộp bằng errors.Join.
-func NewTask(projectID int, title string) (*Task, error) {
+func New(projectID int, title string) (*Task, error) {
 	title = strings.TrimSpace(title)
 	var errs []error
 	if projectID <= 0 {
