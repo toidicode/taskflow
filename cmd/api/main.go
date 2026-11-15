@@ -2,9 +2,13 @@
 package main
 
 import (
+	"errors"
 	"flag"
-	"log"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/toidicode/taskflow/internal/project"
@@ -12,32 +16,56 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", ":8080", "địa chỉ server lắng nghe, dạng host:port")
-	corsOrigin := flag.String("cors-origin", "http://localhost:5173", "origin của frontend được gọi API (rỗng: tắt CORS)")
-	flag.Parse()
+	cfg, err := loadConfig(os.Args[1:], os.LookupEnv, os.Stderr)
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		os.Exit(0) // -h: đã in hướng dẫn
+	case errors.Is(err, errBadFlag):
+		os.Exit(2) // đã in lỗi và hướng dẫn
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "cấu hình không hợp lệ:\n%v\n", err)
+		os.Exit(2)
+	}
+
+	logger := newLogger(os.Stderr, cfg)
+	slog.SetDefault(logger) // các hàm slog.Info, slog.Error... và package log đều đi qua logger này
+	slog.Info("đã đọc cấu hình", "config", cfg)
 
 	projects := project.NewMemoryStore()
 	tasks := task.NewMemoryStore()
 	if err := seed(projects, tasks); err != nil {
-		log.Fatal(err)
+		slog.Error("tạo dữ liệu mẫu", "err", err)
+		os.Exit(1)
 	}
 
-	srv := newServer(*addr, newAPI(projects, tasks, *corsOrigin))
-	log.Printf("TaskFlow API lắng nghe tại %s", *addr)
+	srv := newServer(cfg, newAPI(projects, tasks, cfg.CORSOrigin))
+	slog.Info("TaskFlow API lắng nghe", "addr", cfg.Addr)
 	if err := srv.ListenAndServe(); err != nil {
-		log.Fatal(err)
+		slog.Error("server dừng", "err", err)
+		os.Exit(1)
 	}
 }
 
-// newServer tạo http.Server có đủ timeout cho handler h.
-func newServer(addr string, h http.Handler) *http.Server {
+// newLogger tạo logger ghi ra w theo định dạng và mức log trong cfg.
+func newLogger(w io.Writer, cfg Config) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: cfg.LogLevel}
+	if cfg.LogFormat == "json" {
+		return slog.New(slog.NewJSONHandler(w, opts))
+	}
+	return slog.New(slog.NewTextHandler(w, opts))
+}
+
+// newServer tạo http.Server cho handler h với các timeout trong cfg.
+func newServer(cfg Config, h http.Handler) *http.Server {
 	return &http.Server{
-		Addr:              addr,
+		Addr:              cfg.Addr,
 		Handler:           h,
-		ReadHeaderTimeout: 5 * time.Second,  // đọc xong header
-		ReadTimeout:       10 * time.Second, // đọc xong cả request, gồm body
-		WriteTimeout:      10 * time.Second, // ghi xong response
-		IdleTimeout:       60 * time.Second, // chờ request kế tiếp trên kết nối keep-alive
+		ReadHeaderTimeout: 5 * time.Second, // đọc xong header
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		// lỗi nội bộ của net/http (VD TLS handshake) cũng ghi qua slog
+		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
 	}
 }
 

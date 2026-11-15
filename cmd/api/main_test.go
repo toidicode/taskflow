@@ -299,9 +299,13 @@ func TestListTasksHeaders(t *testing.T) {
 
 func TestWriteJSONError(t *testing.T) {
 	// Status 7 không có tên nên MarshalText trả lỗi: writeJSON phải đổi sang 500
+	logs := captureLog(t)
 	rec := httptest.NewRecorder()
 	writeJSON(rec, http.StatusOK, &task.Task{ID: 1, Status: 7})
 	if rec.Code != http.StatusInternalServerError || rec.Body.String() != `{"error":"lỗi máy chủ"}`+"\n" {
 		t.Errorf("writeJSON lỗi: %d %q", rec.Code, rec.Body)
+	}
+	if e := logEntries(t, logs); len(e) != 1 || e[0]["msg"] != "writeJSON" || e[0]["level"] != "ERROR" {
+		t.Errorf("log = %v, muốn một dòng ERROR writeJSON", e)
 	}
 }

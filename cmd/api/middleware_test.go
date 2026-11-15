@@ -2,22 +2,39 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
 
-// captureLog chuyển output của package log vào một buffer cho tới hết test.
+// captureLog thay logger mặc định bằng logger JSON ghi vào buffer cho tới hết test.
+// Test dùng captureLog không được chạy song song vì logger mặc định là biến dùng chung.
 func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(old) })
 	return &buf
+}
+
+// logEntries đọc từng dòng log JSON trong buf thành map.
+func logEntries(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var entries []map[string]any
+	dec := json.NewDecoder(buf)
+	for dec.More() {
+		var e map[string]any
+		if err := dec.Decode(&e); err != nil {
+			t.Fatalf("log không phải JSON: %v", err)
+		}
+		entries = append(entries, e)
+	}
+	return entries
 }
 
 func TestChainOrder(t *testing.T) {
@@ -87,28 +104,46 @@ func TestLogRequests(t *testing.T) {
 	logs := captureLog(t)
 
 	tests := []struct {
-		name    string
-		handler http.HandlerFunc
-		wantLog string
+		name      string
+		handler   http.HandlerFunc
+		wantLevel string
+		status    float64 // số trong JSON giải mã vào any thành float64
+		size      float64
 	}{
 		{"WriteHeader rồi Write", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusCreated)
 			fmt.Fprint(w, "hello")
-		}, "POST /x?a=1 201 5B "},
+		}, "INFO", 201, 5},
 		{"chỉ Write", func(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, "ok")
-		}, "POST /x?a=1 200 2B "},
-		{"không ghi gì", func(w http.ResponseWriter, r *http.Request) {}, "POST /x?a=1 200 0B "},
-		{"lỗi", func(w http.ResponseWriter, r *http.Request) {
+		}, "INFO", 200, 2},
+		{"không ghi gì", func(w http.ResponseWriter, r *http.Request) {}, "INFO", 200, 0},
+		{"lỗi 404", func(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, http.StatusNotFound, "x")
-		}, "POST /x?a=1 404 14B "},
+		}, "WARN", 404, 14},
+		{"lỗi 500", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}, "ERROR", 500, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logs.Reset()
 			send(logRequests(tt.handler), "POST", "/x?a=1", "")
-			if !strings.Contains(logs.String(), " - "+tt.wantLog) {
-				t.Errorf("log = %q, muốn chứa %q", logs.String(), tt.wantLog)
+
+			entries := logEntries(t, logs)
+			if len(entries) != 1 {
+				t.Fatalf("có %d dòng log, muốn 1", len(entries))
+			}
+			e := entries[0]
+			want := map[string]any{"level": tt.wantLevel, "msg": "request", "request_id": "-",
+				"method": "POST", "path": "/x?a=1", "status": tt.status, "size": tt.size}
+			for k, v := range want {
+				if e[k] != v {
+					t.Errorf("%s = %v, muốn %v", k, e[k], v)
+				}
+			}
+			if _, ok := e["duration"].(float64); !ok {
+				t.Errorf("duration = %v, muốn một số (nano giây)", e["duration"])
 			}
 		})
 	}
@@ -146,10 +181,19 @@ func TestRecoverPanic(t *testing.T) {
 		t.Errorf("Connection = %q, muốn close", got)
 	}
 	id := rec.Header().Get("X-Request-ID")
-	for _, want := range []string{id + " panic: toang\n", "goroutine ", id + " GET /boom 500 "} {
-		if !strings.Contains(logs.String(), want) {
-			t.Errorf("log thiếu %q:\n%s", want, logs.String())
-		}
+	entries := logEntries(t, logs)
+	if len(entries) != 2 {
+		t.Fatalf("có %d dòng log, muốn 2 (panic và request)", len(entries))
+	}
+	p, req := entries[0], entries[1]
+	if p["msg"] != "panic" || p["err"] != "toang" || p["request_id"] != id || p["level"] != "ERROR" {
+		t.Errorf("log panic = %v", p)
+	}
+	if stack, _ := p["stack"].(string); !strings.Contains(stack, "goroutine ") {
+		t.Errorf("log panic thiếu stack trace: %q", stack)
+	}
+	if req["msg"] != "request" || req["status"] != float64(500) || req["request_id"] != id {
+		t.Errorf("log request = %v", req)
 	}
 }
 
@@ -222,8 +266,9 @@ func TestNewAPI(t *testing.T) {
 	if rec.Code != 200 || id == "" {
 		t.Errorf("status = %d, X-Request-ID = %q", rec.Code, id)
 	}
-	if want := id + " GET /api/v1/tasks/2 200 "; !strings.Contains(logs.String(), want) {
-		t.Errorf("log = %q, muốn chứa %q", logs.String(), want)
+	entries := logEntries(t, logs)
+	if len(entries) != 1 || entries[0]["request_id"] != id || entries[0]["path"] != "/api/v1/tasks/2" {
+		t.Errorf("log = %v, muốn một dòng có request_id %q", entries, id)
 	}
 
 	// mux trả 405 cho OPTIONS, nhưng preflight đã được cors trả lời trước khi tới mux

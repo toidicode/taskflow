@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"mime"
 	"net/http"
 	"strings"
@@ -22,7 +22,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	// mã hóa trước khi ghi: lỗi thì vẫn kịp đổi sang 500 vì chưa gửi header nào
 	data, err := json.Marshal(v)
 	if err != nil {
-		log.Printf("writeJSON: %v", err)
+		slog.Error("writeJSON", "err", err)
 		status, data = http.StatusInternalServerError, []byte(`{"error":"lỗi máy chủ"}`)
 	}
 	w.Header().Set("Content-Type", "application/json")

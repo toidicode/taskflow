@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -90,7 +90,7 @@ func createTask(projects *project.MemoryStore, store task.Store) http.HandlerFun
 func validTask(w http.ResponseWriter, projects *project.MemoryStore, t *task.Task) bool {
 	v := validator{}
 	if err := v.addError(t.Validate()); err != nil {
-		log.Printf("validTask: %v", err) // Validate chỉ trả lỗi validate, tới đây là bug
+		slog.Error("validTask", "err", err) // Validate chỉ trả lỗi validate, tới đây là bug
 		errorJSON(w, http.StatusInternalServerError, "lỗi máy chủ")
 		return false
 	}

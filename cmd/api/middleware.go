@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"log"
+	"log/slog"
 	"net/http"
 	"runtime/debug"
 	"time"
@@ -93,7 +93,14 @@ func (rec *statusRecorder) Unwrap() http.ResponseWriter {
 	return rec.ResponseWriter
 }
 
-// logRequests ghi một dòng log cho mỗi request: ID, method, path, status, số byte, thời gian xử lý.
+// requestLogger trả về logger mặc định gắn sẵn request_id của r,
+// mọi dòng log về request này đều có cùng ID.
+func requestLogger(r *http.Request) *slog.Logger {
+	return slog.With("request_id", requestIDFrom(r.Context()))
+}
+
+// logRequests ghi một dòng log cho mỗi request: method, path, status, số byte, thời gian xử lý.
+// Lỗi 5xx ghi ở mức ERROR, 4xx ở mức WARN, còn lại INFO.
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -102,8 +109,21 @@ func logRequests(next http.Handler) http.Handler {
 		if rec.status == 0 {
 			rec.status = http.StatusOK // handler không ghi gì cả
 		}
-		log.Printf("%s %s %s %d %dB %v", requestIDFrom(r.Context()), r.Method, r.URL.RequestURI(),
-			rec.status, rec.size, time.Since(start).Round(time.Microsecond))
+
+		level := slog.LevelInfo
+		switch {
+		case rec.status >= 500:
+			level = slog.LevelError
+		case rec.status >= 400:
+			level = slog.LevelWarn
+		}
+		requestLogger(r).LogAttrs(r.Context(), level, "request",
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.RequestURI()),
+			slog.Int("status", rec.status),
+			slog.Int("size", rec.size),
+			slog.Duration("duration", time.Since(start)),
+		)
 	})
 }
 
@@ -118,7 +138,7 @@ func recoverPanic(next http.Handler) http.Handler {
 			if err == http.ErrAbortHandler {
 				panic(err) // panic có chủ đích để hủy response, trả lại cho net/http
 			}
-			log.Printf("%s panic: %v\n%s", requestIDFrom(r.Context()), err, debug.Stack())
+			requestLogger(r).Error("panic", "err", err, "stack", string(debug.Stack()))
 			w.Header().Set("Connection", "close")
 			errorJSON(w, http.StatusInternalServerError, "lỗi máy chủ")
 		}()
