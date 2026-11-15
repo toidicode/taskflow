@@ -1,5 +1,6 @@
 // Package postgres lưu project và task của TaskFlow trong PostgreSQL,
-// qua database/sql và driver pgx.
+// qua database/sql và driver pgx. Câu truy vấn nằm trong queries/*.sql,
+// code Go gọi chúng do sqlc sinh ra trong package dbgen (xem sqlc.yaml).
 package postgres
 
 import (
@@ -33,11 +34,6 @@ func Open(ctx context.Context, url string) (*sql.DB, error) {
 	return db, nil
 }
 
-// scanner là *sql.Row hoặc *sql.Rows, để một hàm scan dùng được cho cả hai.
-type scanner interface {
-	Scan(dest ...any) error
-}
-
 // nullInt đổi quy ước "0 là không có" của Go sang NULL của SQL.
 func nullInt(n int) sql.NullInt64 {
 	return sql.NullInt64{Int64: int64(n), Valid: n != 0}
@@ -46,16 +42,4 @@ func nullInt(n int) sql.NullInt64 {
 // nullTime đổi quy ước "zero value là không có" của time.Time sang NULL của SQL.
 func nullTime(t time.Time) sql.NullTime {
 	return sql.NullTime{Time: t, Valid: !t.IsZero()}
-}
-
-// affected trả về notFound khi câu lệnh UPDATE/DELETE không đụng tới hàng nào.
-func affected(res sql.Result, notFound error) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return notFound
-	}
-	return nil
 }

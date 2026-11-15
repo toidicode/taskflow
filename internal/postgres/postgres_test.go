@@ -108,8 +108,9 @@ func TestTaskStore(t *testing.T) {
 		f    task.Filter
 		want int
 	}{{task.Filter{}, 2}, {task.Filter{ProjectID: p.ID}, 2}, {task.Filter{ProjectID: 9}, 0}, {task.Filter{Status: &doing}, 1}} {
-		if list, err := tasks.List(ctx, tt.f); err != nil || len(list) != tt.want {
-			t.Errorf("List(%+v) = %d task, %v; muốn %d", tt.f, len(list), err, tt.want)
+		// list rỗng phải là [] (JSON "[]") chứ không phải nil (JSON "null")
+		if list, err := tasks.List(ctx, tt.f); err != nil || len(list) != tt.want || list == nil {
+			t.Errorf("List(%+v) = %d task (nil: %v), %v; muốn %d", tt.f, len(list), list == nil, err, tt.want)
 		}
 	}
 
@@ -138,6 +139,9 @@ func TestProjectStore(t *testing.T) {
 	ctx := context.Background()
 	s := postgres.NewProjectStore(db)
 
+	if list, err := s.List(ctx); err != nil || list == nil {
+		t.Errorf("List() khi chưa có project = %#v, %v; muốn slice rỗng khác nil", list, err)
+	}
 	for _, name := range []string{"TaskFlow API", "Website giới thiệu"} {
 		if err := s.Add(ctx, project.New(name, 1)); err != nil {
 			t.Fatal(err)

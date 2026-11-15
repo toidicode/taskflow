@@ -1,0 +1,12 @@
+# Cấu hình sqlc: đọc schema từ migration của goose và các câu truy vấn trong queries/,
+# sinh code Go vào package dbgen. Chạy lại "sqlc generate" mỗi khi sửa migration hoặc query.
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "internal/postgres/migrations"
+    queries: "internal/postgres/queries"
+    gen:
+      go:
+        package: "dbgen"
+        out: "internal/postgres/dbgen"
+        sql_package: "database/sql"
