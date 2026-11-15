@@ -33,6 +33,14 @@ func main() {
 	slog.SetDefault(logger) // các hàm slog.Info, slog.Error... và package log đều đi qua logger này
 	slog.Info("đã đọc cấu hình", "config", cfg)
 
+	if cfg.Migrate {
+		if err := migrate(context.Background(), cfg.DatabaseURL); err != nil {
+			slog.Error("migration", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	projects, tasks, err := openStores(context.Background(), cfg)
 	if err != nil {
 		slog.Error("khởi tạo store", "err", err)
@@ -83,7 +91,50 @@ func openStores(ctx context.Context, cfg Config) (project.Store, task.Store, err
 		return nil, nil, fmt.Errorf("kết nối PostgreSQL: %w", err)
 	}
 	slog.Info("đã kết nối PostgreSQL")
+
+	// schema cũ hơn code thì mọi truy vấn đều có thể lỗi: dừng ngay thay vì trả 500
+	m, err := postgres.NewMigrator(db)
+	if err != nil {
+		db.Close()
+		return nil, nil, err
+	}
+	pending, err := m.HasPending(ctx)
+	if err != nil {
+		db.Close()
+		return nil, nil, fmt.Errorf("kiểm tra migration: %w", err)
+	}
+	if pending {
+		db.Close()
+		return nil, nil, errors.New("database còn migration chưa chạy, hãy chạy với -migrate trước")
+	}
 	return postgres.NewProjectStore(db), postgres.NewTaskStore(db), nil
+}
+
+// migrate chạy mọi migration chưa chạy trên database ở url và ghi log từng migration.
+func migrate(ctx context.Context, url string) error {
+	db, err := postgres.Open(ctx, url)
+	if err != nil {
+		return fmt.Errorf("kết nối PostgreSQL: %w", err)
+	}
+	defer db.Close()
+
+	m, err := postgres.NewMigrator(db)
+	if err != nil {
+		return err
+	}
+	results, err := m.Up(ctx) // chỉ chạy các migration chưa có trong goose_db_version
+	if err != nil {
+		return err // migration hỏng thì err là *goose.PartialError, nêu rõ file nào
+	}
+	for _, r := range results {
+		slog.Info("đã chạy migration", "file", r.Source.Path, "duration", r.Duration)
+	}
+	version, err := m.GetDBVersion(ctx)
+	if err != nil {
+		return err
+	}
+	slog.Info("database đã ở phiên bản mới nhất", "version", version)
+	return nil
 }
 
 // seed thêm vài project và task mẫu cho store trong bộ nhớ.

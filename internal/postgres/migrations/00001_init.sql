@@ -1,5 +1,7 @@
--- Schema tạm thời của TaskFlow, chạy bằng psql. Bài 30 thay file này bằng migration của goose.
+-- Schema của Bài 29. Giữ IF NOT EXISTS để database đã tạo bảng bằng schema.sql
+-- chạy được migration này mà không mất dữ liệu.
 
+-- +goose Up
 CREATE TABLE IF NOT EXISTS projects (
     id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name        text   NOT NULL,
@@ -20,3 +22,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 -- PostgreSQL không tự tạo index cho khóa ngoại, mà task hay được lọc theo project
 CREATE INDEX IF NOT EXISTS tasks_project_id_idx ON tasks (project_id);
+
+-- +goose Down
+DROP TABLE tasks;
+DROP TABLE projects;

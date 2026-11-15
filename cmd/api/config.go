@@ -21,6 +21,7 @@ type Config struct {
 	WriteTimeout time.Duration // ghi xong response
 	IdleTimeout  time.Duration // giữ kết nối keep-alive
 	DatabaseURL  string        // chuỗi kết nối PostgreSQL (chứa mật khẩu), rỗng là dùng store trong bộ nhớ
+	Migrate      bool          // chạy migration rồi thoát, không chạy server
 }
 
 // defaultConfig trả về cấu hình mặc định, đủ để chạy trên máy dev.
@@ -70,6 +71,8 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.DurationVar(&cfg.WriteTimeout, "write-timeout", cfg.WriteTimeout, "ghi response (TASKFLOW_WRITE_TIMEOUT)")
 	fs.DurationVar(&cfg.IdleTimeout, "idle-timeout", cfg.IdleTimeout, "keep-alive (TASKFLOW_IDLE_TIMEOUT)")
 	// DatabaseURL cố ý không có flag: tham số dòng lệnh lộ ra trong ps
+	// Migrate chỉ có flag: là một lệnh chạy một lần chứ không phải cấu hình lâu dài
+	fs.BoolVar(&cfg.Migrate, "migrate", false, "chạy migration database rồi thoát")
 	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return cfg, err
 	} else if err != nil {
@@ -133,6 +136,9 @@ func (c Config) validate() error {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" {
 			errs = append(errs, fmt.Errorf("cors-origin %q: cần dạng scheme://host[:port], không có / ở cuối", c.CORSOrigin))
 		}
+	}
+	if c.Migrate && c.DatabaseURL == "" {
+		errs = append(errs, errors.New("migrate: cần đặt DATABASE_URL"))
 	}
 	timeouts := []struct {
 		name string

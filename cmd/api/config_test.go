@@ -39,6 +39,8 @@ func TestLoadConfig(t *testing.T) {
 			func(c Config) bool { return c.Addr == ":7000" && c.LogLevel == slog.LevelWarn }},
 		{"env rỗng tắt CORS", nil, map[string]string{"TASKFLOW_CORS_ORIGIN": ""},
 			func(c Config) bool { return c.CORSOrigin == "" }},
+		{"-migrate", []string{"-migrate"}, map[string]string{"DATABASE_URL": "postgres://u:p@db/taskflow"},
+			func(c Config) bool { return c.Migrate }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -65,6 +67,7 @@ func TestLoadConfigErrors(t *testing.T) {
 		{"giá trị sai", []string{"-addr", "8080", "-log-format", "xml", "-cors-origin", "http://localhost:5173/", "-idle-timeout", "0s"},
 			nil, []string{`addr "8080"`, `log-format "xml"`, `cors-origin "http://localhost:5173/"`, "idle-timeout 0s"}},
 		{"thừa tham số", []string{"serve"}, nil, []string{`không nhận tham số "serve"`}},
+		{"-migrate thiếu DATABASE_URL", []string{"-migrate"}, nil, []string{"migrate: cần đặt DATABASE_URL"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

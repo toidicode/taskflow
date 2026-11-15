@@ -13,10 +13,24 @@ import (
 	"github.com/toidicode/taskflow/internal/task"
 )
 
-// openTestDB kết nối tới database trong TASKFLOW_TEST_DATABASE_URL rồi tạo lại các bảng
-// từ schema.sql. Không đặt biến này thì test được bỏ qua, go test ./... vẫn chạy được
-// trên máy không có PostgreSQL. Test xóa sạch bảng nên đừng trỏ biến này vào database thật.
+// openTestDB kết nối tới database trong TASKFLOW_TEST_DATABASE_URL, xóa sạch schema public
+// rồi chạy lại mọi migration. Không đặt biến này thì test được bỏ qua, go test ./... vẫn chạy
+// được trên máy không có PostgreSQL. Test xóa sạch dữ liệu nên đừng trỏ biến này vào database thật.
 func openTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db := openEmptyDB(t)
+	m, err := postgres.NewMigrator(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Up(context.Background()); err != nil {
+		t.Fatalf("chạy migration: %v", err)
+	}
+	return db
+}
+
+// openEmptyDB kết nối tới database test và xóa mọi bảng, kể cả goose_db_version.
+func openEmptyDB(t *testing.T) *sql.DB {
 	t.Helper()
 	url := os.Getenv("TASKFLOW_TEST_DATABASE_URL")
 	if url == "" {
@@ -29,15 +43,8 @@ func openTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	schema, err := os.ReadFile("schema.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS tasks, projects"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, string(schema)); err != nil {
-		t.Fatalf("tạo bảng: %v", err)
+	if _, err := db.ExecContext(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public"); err != nil {
+		t.Fatalf("xóa schema: %v", err)
 	}
 	return db
 }
