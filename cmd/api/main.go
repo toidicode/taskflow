@@ -13,6 +13,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8080", "địa chỉ server lắng nghe, dạng host:port")
+	corsOrigin := flag.String("cors-origin", "http://localhost:5173", "origin của frontend được gọi API (rỗng: tắt CORS)")
 	flag.Parse()
 
 	projects := project.NewMemoryStore()
@@ -21,7 +22,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	srv := newServer(*addr, newMux(projects, tasks))
+	srv := newServer(*addr, newAPI(projects, tasks, *corsOrigin))
 	log.Printf("TaskFlow API lắng nghe tại %s", *addr)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)

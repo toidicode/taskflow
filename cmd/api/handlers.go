@@ -34,6 +34,16 @@ func newMux(projects *project.MemoryStore, tasks task.Store) *http.ServeMux {
 	return mux
 }
 
+// newAPI bọc mux bằng các middleware dùng chung cho mọi route, theo thứ tự từ ngoài vào trong.
+func newAPI(projects *project.MemoryStore, tasks task.Store, corsOrigin string) http.Handler {
+	return chain(newMux(projects, tasks),
+		requestID,    // ngoài cùng: các middleware sau đều đọc được ID
+		logRequests,  // log cả response 500 do recoverPanic trả về
+		recoverPanic, // bắt panic của mọi thứ phía trong
+		cors(corsOrigin),
+	)
+}
+
 // health cho biết server còn sống, dùng cho Docker/load balancer kiểm tra.
 func health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
