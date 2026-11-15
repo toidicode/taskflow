@@ -3,6 +3,7 @@ package task
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +29,16 @@ func (s Status) String() string {
 		return "done"
 	}
 	return "Status(" + strconv.Itoa(int(s)) + ")"
+}
+
+// ParseStatus chuyển tên trạng thái ("todo", "doing", "done") thành Status.
+func ParseStatus(name string) (Status, error) {
+	for _, s := range []Status{StatusTodo, StatusDoing, StatusDone} {
+		if s.String() == name {
+			return s, nil
+		}
+	}
+	return 0, fmt.Errorf("trạng thái %q không hợp lệ, chọn todo, doing hoặc done", name)
 }
 
 // Task là một công việc thuộc một project.

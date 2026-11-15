@@ -1,0 +1,19 @@
+TaskFlow: quản lý công việc từ dòng lệnh.
+
+Cách dùng:
+  taskflow [-file FILE] <lệnh> [tham số]
+
+Các lệnh:
+  add      -project N -title TEXT [-due YYYY-MM-DD]   thêm một task
+  import   -project N < FILE                          thêm task từ stdin, mỗi dòng một task
+  list     [-project N] [-status S] [-overdue]        liệt kê task
+  start    <id>                                       chuyển task sang doing
+  done     <id>                                       đánh dấu task đã xong
+  assign   -user N <id>                               giao task cho user N
+  version                                             in phiên bản
+  help                                                in hướng dẫn này
+
+Flag chung:
+  -file FILE   file JSON lưu task (mặc định: $TASKFLOW_FILE, không có thì tasks.json)
+
+Chạy "taskflow <lệnh> -h" để xem flag của từng lệnh.

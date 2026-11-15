@@ -98,6 +98,18 @@ func TestIsOverdue(t *testing.T) {
 	}
 }
 
+func TestParseStatus(t *testing.T) {
+	for _, want := range []task.Status{task.StatusTodo, task.StatusDoing, task.StatusDone} {
+		got, err := task.ParseStatus(want.String())
+		if err != nil || got != want {
+			t.Errorf("ParseStatus(%q) = %v, %v; muốn %v, nil", want.String(), got, err, want)
+		}
+	}
+	if _, err := task.ParseStatus("xong"); err == nil {
+		t.Errorf("ParseStatus(%q) không trả về lỗi", "xong")
+	}
+}
+
 func FuzzNew(f *testing.F) {
 	// corpus mẫu: fuzzer biến đổi dần từ các giá trị này
 	f.Add("Thiết kế database")
