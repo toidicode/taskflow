@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/toidicode/taskflow/internal/project"
@@ -94,17 +95,37 @@ func seedTasks(store task.Store, projectID int, now time.Time) error {
 func printReport(store task.Store, p *project.Project, now time.Time) {
 	tasks := store.List()
 	fmt.Printf("Project #%d %q của user #%d\n", p.ID, p.Name, p.OwnerID)
-	done, overdue := 0, 0
 	for _, t := range tasks {
 		fmt.Printf("  #%d %-18s %-5s user #%d  %s\n", t.ID, t.Title, t.Status, t.AssigneeID, dueText(t, now))
-		if t.IsDone() {
-			done++
-		}
-		if t.IsOverdue(now) {
-			overdue++
+	}
+
+	done := filter(tasks, func(t *task.Task) bool { return t.IsDone() })
+	overdue := filter(tasks, func(t *task.Task) bool { return t.IsOverdue(now) })
+	fmt.Printf("Đã xong %d/%d task, quá hạn %d task\n", len(done), len(tasks), len(overdue))
+	if len(overdue) > 0 {
+		titles := mapSlice(overdue, func(t *task.Task) string { return t.Title })
+		fmt.Println("Cần xử lý gấp:", strings.Join(titles, ", "))
+	}
+}
+
+// filter trả về một slice mới gồm các phần tử của xs mà keep trả về true.
+func filter[T any](xs []T, keep func(T) bool) []T {
+	var result []T
+	for _, x := range xs {
+		if keep(x) {
+			result = append(result, x)
 		}
 	}
-	fmt.Printf("Đã xong %d/%d task, quá hạn %d task\n", done, len(tasks), overdue)
+	return result
+}
+
+// mapSlice áp dụng f lên từng phần tử của xs, trả về slice kết quả.
+func mapSlice[T, U any](xs []T, f func(T) U) []U {
+	result := make([]U, 0, len(xs))
+	for _, x := range xs {
+		result = append(result, f(x))
+	}
+	return result
 }
 
 // dueText mô tả hạn của task t, VD "hạn 14/11/2026 (quá hạn)".
