@@ -2,15 +2,20 @@ package main
 
 import (
 	"cmp"
+	"errors"
+	"fmt"
 	"slices"
 )
+
+// ErrNotFound được trả về (đã wrap) khi không có task cần tìm.
+var ErrNotFound = errors.New("không tìm thấy")
 
 // TaskStore là nơi lưu và tìm task.
 type TaskStore interface {
 	// Add cấp ID mới cho t rồi lưu lại.
 	Add(t *Task)
-	// Get trả về task có id cần tìm, ok bằng false khi không có task đó.
-	Get(id int) (t *Task, ok bool)
+	// Get trả về task có id cần tìm, lỗi wrap ErrNotFound khi không có task đó.
+	Get(id int) (*Task, error)
 	// List trả về mọi task, sắp xếp theo ID.
 	List() []*Task
 }
@@ -38,9 +43,12 @@ func (s *MemoryTaskStore) Add(t *Task) {
 	s.tasks[t.ID] = t
 }
 
-func (s *MemoryTaskStore) Get(id int) (*Task, bool) {
+func (s *MemoryTaskStore) Get(id int) (*Task, error) {
 	t, ok := s.tasks[id]
-	return t, ok
+	if !ok {
+		return nil, fmt.Errorf("task #%d: %w", id, ErrNotFound)
+	}
+	return t, nil
 }
 
 func (s *MemoryTaskStore) List() []*Task {

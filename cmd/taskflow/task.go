@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 )
@@ -37,13 +38,35 @@ type Task struct {
 	AssigneeID  int // 0 nghĩa là chưa giao cho ai
 }
 
+// ValidationError cho biết một field có giá trị không hợp lệ.
+type ValidationError struct {
+	Field   string
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return e.Field + ": " + e.Message
+}
+
 // NewTask tạo một task mới ở trạng thái todo, ID do TaskStore cấp khi thêm task.
-func NewTask(projectID int, title string) *Task {
+// Dữ liệu không hợp lệ thì trả về các *ValidationError gộp bằng errors.Join.
+func NewTask(projectID int, title string) (*Task, error) {
+	title = strings.TrimSpace(title)
+	var errs []error
+	if projectID <= 0 {
+		errs = append(errs, &ValidationError{Field: "project_id", Message: "phải lớn hơn 0"})
+	}
+	if title == "" {
+		errs = append(errs, &ValidationError{Field: "title", Message: "không được để trống"})
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
 	return &Task{
 		ProjectID: projectID,
-		Title:     strings.TrimSpace(title),
+		Title:     title,
 		Status:    StatusTodo,
-	}
+	}, nil
 }
 
 // Assign giao task cho người dùng có id là userID.
