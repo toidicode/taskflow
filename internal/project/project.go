@@ -5,16 +5,15 @@ import "strings"
 
 // Project là một dự án, chứa nhiều task.
 type Project struct {
-	ID          int
-	Name        string
-	Description string
-	OwnerID     int
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	OwnerID     int    `json:"owner_id"`
 }
 
-// New tạo một project mới của người dùng ownerID.
-func New(id int, name string, ownerID int) *Project {
+// New tạo một project mới của người dùng ownerID, ID do Store cấp khi thêm project.
+func New(name string, ownerID int) *Project {
 	return &Project{
-		ID:      id,
 		Name:    strings.TrimSpace(name),
 		OwnerID: ownerID,
 	}

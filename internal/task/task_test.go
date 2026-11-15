@@ -1,6 +1,7 @@
 package task_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -107,6 +108,55 @@ func TestParseStatus(t *testing.T) {
 	}
 	if _, err := task.ParseStatus("xong"); err == nil {
 		t.Errorf("ParseStatus(%q) không trả về lỗi", "xong")
+	}
+}
+
+func TestTaskJSON(t *testing.T) {
+	due := time.Date(2026, 11, 30, 17, 0, 0, 0, time.UTC)
+	tk := &task.Task{ID: 3, ProjectID: 1, Title: "Viết test", Status: task.StatusDoing, DueDate: due}
+
+	b, err := json.Marshal(tk)
+	if err != nil {
+		t.Fatalf("Marshal() lỗi: %v", err)
+	}
+	// description, assignee_id, completed_at là zero value nên bị bỏ
+	want := `{"id":3,"project_id":1,"title":"Viết test","status":"doing","due_date":"2026-11-30T17:00:00Z"}`
+	if string(b) != want {
+		t.Errorf("Marshal() = %s\nmuốn        %s", b, want)
+	}
+
+	var got task.Task
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("Unmarshal() lỗi: %v", err)
+	}
+	if got.Status != task.StatusDoing || !got.DueDate.Equal(due) || !got.CompletedAt.IsZero() {
+		t.Errorf("Unmarshal() = %+v", got)
+	}
+
+	for _, in := range []string{`{"status":"xong"}`, `{"status":2}`} {
+		if err := json.Unmarshal([]byte(in), &got); err == nil {
+			t.Errorf("Unmarshal(%s) không lỗi, muốn có lỗi", in)
+		}
+	}
+	if _, err := json.Marshal(task.Status(7)); err == nil {
+		t.Error("Marshal(Status(7)) không lỗi, muốn có lỗi")
+	}
+}
+
+func TestSetStatus(t *testing.T) {
+	tk, _ := task.New(1, "Viết API")
+	tk.SetStatus(task.StatusDone)
+	done := tk.CompletedAt
+	if !tk.IsDone() || done.IsZero() {
+		t.Fatalf("sau SetStatus(done): %v, %v", tk.Status, tk.CompletedAt)
+	}
+	tk.SetStatus(task.StatusDone) // đã xong thì giữ nguyên thời điểm hoàn thành
+	if !tk.CompletedAt.Equal(done) {
+		t.Errorf("CompletedAt đổi thành %v, muốn giữ %v", tk.CompletedAt, done)
+	}
+	tk.SetStatus(task.StatusDoing)
+	if tk.Status != task.StatusDoing || !tk.CompletedAt.IsZero() {
+		t.Errorf("sau SetStatus(doing): %v, %v; muốn doing, zero", tk.Status, tk.CompletedAt)
 	}
 }
 

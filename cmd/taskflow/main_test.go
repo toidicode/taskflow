@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -74,6 +75,29 @@ func TestRun(t *testing.T) {
 				t.Errorf("lỗi nhưng vẫn in ra stdout: %q", stdout.String())
 			}
 		})
+	}
+}
+
+func TestFileFormat(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "tasks.json")
+	a := &app{stdin: strings.NewReader(""), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}, now: time.Now}
+	for _, args := range [][]string{
+		{"add", "-project", "1", "-title", "Viết API"},
+		{"start", "1"},
+	} {
+		if code := a.run(append([]string{"-file", file}, args...)); code != 0 {
+			t.Fatalf("%v: exit code %d", args, code)
+		}
+	}
+
+	// tasks.json dùng key theo tag json, status dạng chữ, bỏ các field zero value
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[\n  {\n    \"id\": 1,\n    \"project_id\": 1,\n    \"title\": \"Viết API\",\n    \"status\": \"doing\"\n  }\n]"
+	if string(data) != want {
+		t.Errorf("tasks.json =\n%s\nmuốn\n%s", data, want)
 	}
 }
 

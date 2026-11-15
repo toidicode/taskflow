@@ -20,6 +20,10 @@ type Store interface {
 	Add(t *Task)
 	// Get trả về task có id cần tìm, lỗi wrap ErrNotFound khi không có task đó.
 	Get(id int) (*Task, error)
+	// Update thay task có cùng ID với t bằng t, lỗi wrap ErrNotFound khi không có task đó.
+	Update(t *Task) error
+	// Delete xóa task có id cần xóa, lỗi wrap ErrNotFound khi không có task đó.
+	Delete(id int) error
 	// All trả về iterator duyệt mọi task theo thứ tự ID.
 	All() iter.Seq[*Task]
 }
@@ -59,6 +63,26 @@ func (s *MemoryStore) Get(id int) (*Task, error) {
 		return nil, fmt.Errorf("task #%d: %w", id, ErrNotFound)
 	}
 	return t, nil
+}
+
+func (s *MemoryStore) Update(t *Task) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tasks[t.ID]; !ok {
+		return fmt.Errorf("task #%d: %w", t.ID, ErrNotFound)
+	}
+	s.tasks[t.ID] = t
+	return nil
+}
+
+func (s *MemoryStore) Delete(id int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tasks[id]; !ok {
+		return fmt.Errorf("task #%d: %w", id, ErrNotFound)
+	}
+	delete(s.tasks, id)
+	return nil
 }
 
 func (s *MemoryStore) All() iter.Seq[*Task] {

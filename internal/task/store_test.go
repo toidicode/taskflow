@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -62,6 +63,34 @@ func TestMemoryStore_AddGet(t *testing.T) {
 	}
 }
 
+func TestMemoryStore_UpdateDelete(t *testing.T) {
+	s := newStore(t, "Thiết kế database", "Viết API")
+
+	// sửa trên bản sao rồi Update: task cũ trong store không bị đổi tại chỗ
+	old, _ := s.Get(2)
+	c := *old
+	c.Title = "Viết REST API"
+	if err := s.Update(&c); err != nil {
+		t.Fatalf("Update() lỗi: %v", err)
+	}
+	if got, _ := s.Get(2); got.Title != "Viết REST API" || old.Title != "Viết API" {
+		t.Errorf("sau Update: store %q, bản cũ %q", got.Title, old.Title)
+	}
+	if err := s.Update(&task.Task{ID: 9}); !errors.Is(err, task.ErrNotFound) {
+		t.Errorf("Update(#9) lỗi = %v, muốn wrap ErrNotFound", err)
+	}
+
+	if err := s.Delete(1); err != nil {
+		t.Fatalf("Delete(1) lỗi: %v", err)
+	}
+	if got := titles(s); !slices.Equal(got, []string{"Viết REST API"}) {
+		t.Errorf("sau Delete: %v", got)
+	}
+	if err := s.Delete(1); !errors.Is(err, task.ErrNotFound) {
+		t.Errorf("Delete(1) lần hai lỗi = %v, muốn wrap ErrNotFound", err)
+	}
+}
+
 func TestMemoryStore_All(t *testing.T) {
 	s := newStore(t, "a", "b", "c", "d")
 
@@ -95,6 +124,14 @@ func TestMemoryStore_SaveLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tasks.json")
 	if err := s.Save(path); err != nil {
 		t.Fatalf("Save() lỗi: %v", err)
+	}
+
+	// từ Bài 25 file dùng key theo tag json và status dạng chữ
+	data, _ := os.ReadFile(path)
+	for _, want := range []string{`"project_id": 1`, `"status": "done"`, `"completed_at": "`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("file không chứa %s:\n%s", want, data)
+		}
 	}
 
 	loaded := task.NewMemoryStore()

@@ -42,8 +42,8 @@ func newServer(addr string, h http.Handler) *http.Server {
 
 // seed thêm vài project và task mẫu. Từ Bài 29 dữ liệu sẽ nằm trong PostgreSQL.
 func seed(projects *project.MemoryStore, tasks task.Store) error {
-	projects.Add(project.New(1, "TaskFlow API", 1))
-	projects.Add(project.New(2, "Website giới thiệu", 1))
+	projects.Add(project.New("TaskFlow API", 1)) // project #1
+	projects.Add(project.New("Website giới thiệu", 1))
 
 	samples := []struct {
 		projectID int

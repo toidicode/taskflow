@@ -20,10 +20,17 @@ func newMux(projects *project.MemoryStore, tasks task.Store) *http.ServeMux {
 		mux.Handle(method+" /api/v1"+path, h)
 	}
 	api("GET", "/projects", listProjects(projects))
+	api("POST", "/projects", createProject(projects))
 	api("GET", "/projects/{id}", getProject(projects))
+	api("PUT", "/projects/{id}", replaceProject(projects))
+	api("DELETE", "/projects/{id}", deleteProject(projects, tasks))
 	api("GET", "/projects/{id}/tasks", listProjectTasks(projects, tasks))
+
 	api("GET", "/tasks", listTasks(tasks))
+	api("POST", "/tasks", createTask(projects, tasks))
 	api("GET", "/tasks/{id}", getTask(tasks))
+	api("PATCH", "/tasks/{id}", updateTask(tasks))
+	api("DELETE", "/tasks/{id}", deleteTask(tasks))
 	return mux
 }
 
@@ -46,106 +53,8 @@ func pathID(r *http.Request) (int, error) {
 // storeError trả 404 khi err là lỗi không tìm thấy, các lỗi khác là 500.
 func storeError(w http.ResponseWriter, err error) {
 	if errors.Is(err, task.ErrNotFound) || errors.Is(err, project.ErrNotFound) {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		errorJSON(w, http.StatusNotFound, err.Error())
 		return
 	}
-	http.Error(w, "lỗi máy chủ", http.StatusInternalServerError)
-}
-
-// listProjects liệt kê mọi project dạng text.
-func listProjects(store *project.MemoryStore) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		projects := store.List()
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("X-Total-Count", strconv.Itoa(len(projects)))
-		for _, p := range projects {
-			fmt.Fprintf(w, "#%d %s (owner %d)\n", p.ID, p.Name, p.OwnerID)
-		}
-	}
-}
-
-// getProject trả về project có ID là wildcard {id}.
-func getProject(store *project.MemoryStore) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		p, err := store.Get(id)
-		if err != nil {
-			storeError(w, err)
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		fmt.Fprintf(w, "#%d %s (owner %d)\n", p.ID, p.Name, p.OwnerID)
-	}
-}
-
-// listProjectTasks liệt kê task của project {id}, lọc được theo ?status= như listTasks.
-func listProjectTasks(projects *project.MemoryStore, tasks task.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if _, err := projects.Get(id); err != nil {
-			storeError(w, err)
-			return
-		}
-		writeTasks(w, r, tasks, id)
-	}
-}
-
-// listTasks liệt kê mọi task dạng text, lọc được theo ?status=todo|doing|done.
-func listTasks(store task.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeTasks(w, r, store, 0)
-	}
-}
-
-// writeTasks ghi các task khớp ?status= (và thuộc projectID nếu projectID khác 0).
-func writeTasks(w http.ResponseWriter, r *http.Request, store task.Store, projectID int) {
-	match := func(*task.Task) bool { return true }
-	if s := r.URL.Query().Get("status"); s != "" {
-		status, err := task.ParseStatus(s)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		match = func(t *task.Task) bool { return t.Status == status }
-	}
-
-	var tasks []*task.Task
-	for t := range store.All() {
-		if (projectID == 0 || t.ProjectID == projectID) && match(t) {
-			tasks = append(tasks, t)
-		}
-	}
-
-	// header phải được đặt trước khi ghi body
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("X-Total-Count", strconv.Itoa(len(tasks)))
-	for _, t := range tasks {
-		fmt.Fprintf(w, "#%d [p%d] %s (%v)\n", t.ID, t.ProjectID, t.Title, t.Status)
-	}
-}
-
-// getTask trả về task có ID là wildcard {id}.
-func getTask(store task.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		t, err := store.Get(id)
-		if err != nil {
-			storeError(w, err)
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		fmt.Fprintf(w, "#%d [p%d] %s (%v)\n", t.ID, t.ProjectID, t.Title, t.Status)
-	}
+	errorJSON(w, http.StatusInternalServerError, "lỗi máy chủ")
 }

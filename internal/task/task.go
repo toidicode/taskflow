@@ -41,16 +41,35 @@ func ParseStatus(name string) (Status, error) {
 	return 0, fmt.Errorf("trạng thái %q không hợp lệ, chọn todo, doing hoặc done", name)
 }
 
+// MarshalText cho encoding/json (và các package khác) ghi Status thành "todo", "doing", "done".
+func (s Status) MarshalText() ([]byte, error) {
+	switch s {
+	case StatusTodo, StatusDoing, StatusDone:
+		return []byte(s.String()), nil
+	}
+	return nil, fmt.Errorf("trạng thái %d không hợp lệ", int(s))
+}
+
+// UnmarshalText đọc Status từ tên trạng thái, receiver là con trỏ vì phải sửa s.
+func (s *Status) UnmarshalText(text []byte) error {
+	status, err := ParseStatus(string(text))
+	if err != nil {
+		return err
+	}
+	*s = status
+	return nil
+}
+
 // Task là một công việc thuộc một project.
 type Task struct {
-	ID          int
-	ProjectID   int
-	Title       string
-	Description string
-	Status      Status
-	AssigneeID  int       // 0 nghĩa là chưa giao cho ai
-	DueDate     time.Time // zero value nghĩa là không có hạn
-	CompletedAt time.Time // zero value nghĩa là chưa xong
+	ID          int       `json:"id"`
+	ProjectID   int       `json:"project_id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description,omitempty"`
+	Status      Status    `json:"status"`
+	AssigneeID  int       `json:"assignee_id,omitempty"` // 0 nghĩa là chưa giao cho ai
+	DueDate     time.Time `json:"due_date,omitzero"`     // zero value nghĩa là không có hạn
+	CompletedAt time.Time `json:"completed_at,omitzero"` // zero value nghĩa là chưa xong
 }
 
 // ValidationError cho biết một field có giá trị không hợp lệ.
@@ -98,6 +117,18 @@ func (t *Task) Start() {
 func (t *Task) Complete() {
 	t.Status = StatusDone
 	t.CompletedAt = time.Now()
+}
+
+// SetStatus chuyển task sang trạng thái s: sang done thì ghi thời điểm hoàn thành
+// (nếu chưa xong), sang todo/doing thì xóa thời điểm đó.
+func (t *Task) SetStatus(s Status) {
+	switch {
+	case s == StatusDone && !t.IsDone():
+		t.Complete()
+	case s != StatusDone:
+		t.Status = s
+		t.CompletedAt = time.Time{}
+	}
 }
 
 // IsDone cho biết task đã xong hay chưa.
