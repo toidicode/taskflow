@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"iter"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -93,39 +95,42 @@ func seedTasks(store task.Store, projectID int, now time.Time) error {
 
 // printReport in các task trong store của project p, quá hạn tính tại thời điểm now.
 func printReport(store task.Store, p *project.Project, now time.Time) {
-	tasks := store.List()
 	fmt.Printf("Project #%d %q của user #%d\n", p.ID, p.Name, p.OwnerID)
-	for _, t := range tasks {
+	total := 0
+	for t := range store.All() {
+		total++
 		fmt.Printf("  #%d %-18s %-5s user #%d  %s\n", t.ID, t.Title, t.Status, t.AssigneeID, dueText(t, now))
 	}
 
-	done := filter(tasks, func(t *task.Task) bool { return t.IsDone() })
-	overdue := filter(tasks, func(t *task.Task) bool { return t.IsOverdue(now) })
-	fmt.Printf("Đã xong %d/%d task, quá hạn %d task\n", len(done), len(tasks), len(overdue))
+	done := slices.Collect(filter(store.All(), func(t *task.Task) bool { return t.IsDone() }))
+	overdue := slices.Collect(filter(store.All(), func(t *task.Task) bool { return t.IsOverdue(now) }))
+	fmt.Printf("Đã xong %d/%d task, quá hạn %d task\n", len(done), total, len(overdue))
 	if len(overdue) > 0 {
-		titles := mapSlice(overdue, func(t *task.Task) string { return t.Title })
-		fmt.Println("Cần xử lý gấp:", strings.Join(titles, ", "))
+		titles := mapSeq(slices.Values(overdue), func(t *task.Task) string { return t.Title })
+		fmt.Println("Cần xử lý gấp:", strings.Join(slices.Collect(titles), ", "))
 	}
 }
 
-// filter trả về một slice mới gồm các phần tử của xs mà keep trả về true.
-func filter[T any](xs []T, keep func(T) bool) []T {
-	var result []T
-	for _, x := range xs {
-		if keep(x) {
-			result = append(result, x)
+// filter trả về iterator gồm các phần tử của seq mà keep trả về true.
+func filter[T any](seq iter.Seq[T], keep func(T) bool) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for v := range seq {
+			if keep(v) && !yield(v) {
+				return
+			}
 		}
 	}
-	return result
 }
 
-// mapSlice áp dụng f lên từng phần tử của xs, trả về slice kết quả.
-func mapSlice[T, U any](xs []T, f func(T) U) []U {
-	result := make([]U, 0, len(xs))
-	for _, x := range xs {
-		result = append(result, f(x))
+// mapSeq trả về iterator gồm kết quả của f với từng phần tử của seq.
+func mapSeq[T, U any](seq iter.Seq[T], f func(T) U) iter.Seq[U] {
+	return func(yield func(U) bool) {
+		for v := range seq {
+			if !yield(f(v)) {
+				return
+			}
+		}
 	}
-	return result
 }
 
 // dueText mô tả hạn của task t, VD "hạn 14/11/2026 (quá hạn)".

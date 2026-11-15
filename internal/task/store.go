@@ -1,10 +1,11 @@
 package task
 
 import (
-	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
+	"maps"
 	"os"
 	"slices"
 )
@@ -18,8 +19,8 @@ type Store interface {
 	Add(t *Task)
 	// Get trả về task có id cần tìm, lỗi wrap ErrNotFound khi không có task đó.
 	Get(id int) (*Task, error)
-	// List trả về mọi task, sắp xếp theo ID.
-	List() []*Task
+	// All trả về iterator duyệt mọi task theo thứ tự ID.
+	All() iter.Seq[*Task]
 }
 
 // MemoryStore lưu task trong bộ nhớ bằng một map.
@@ -53,15 +54,19 @@ func (s *MemoryStore) Get(id int) (*Task, error) {
 	return t, nil
 }
 
-func (s *MemoryStore) List() []*Task {
-	tasks := make([]*Task, 0, len(s.tasks))
-	for _, t := range s.tasks {
-		tasks = append(tasks, t)
+func (s *MemoryStore) All() iter.Seq[*Task] {
+	return func(yield func(*Task) bool) {
+		for _, id := range slices.Sorted(maps.Keys(s.tasks)) {
+			if !yield(s.tasks[id]) {
+				return
+			}
+		}
 	}
-	slices.SortFunc(tasks, func(a, b *Task) int {
-		return cmp.Compare(a.ID, b.ID)
-	})
-	return tasks
+}
+
+// List trả về mọi task dưới dạng slice, sắp xếp theo ID.
+func (s *MemoryStore) List() []*Task {
+	return slices.Collect(s.All())
 }
 
 // Save ghi mọi task ra file path dưới dạng JSON.
