@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"sync"
 )
 
 // ErrNotFound được trả về (đã wrap) khi không có task cần tìm.
@@ -23,8 +24,10 @@ type Store interface {
 	All() iter.Seq[*Task]
 }
 
-// MemoryStore lưu task trong bộ nhớ bằng một map.
+// MemoryStore lưu task trong bộ nhớ bằng một map, dùng được từ nhiều goroutine.
+// Mutex chỉ bảo vệ map và nextID, không bảo vệ các field của từng Task.
 type MemoryStore struct {
+	mu     sync.RWMutex // bảo vệ tasks và nextID
 	tasks  map[int]*Task
 	nextID int
 }
@@ -41,12 +44,16 @@ func NewMemoryStore() *MemoryStore {
 }
 
 func (s *MemoryStore) Add(t *Task) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	t.ID = s.nextID
 	s.nextID++
 	s.tasks[t.ID] = t
 }
 
 func (s *MemoryStore) Get(id int) (*Task, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	t, ok := s.tasks[id]
 	if !ok {
 		return nil, fmt.Errorf("task #%d: %w", id, ErrNotFound)
@@ -56,8 +63,18 @@ func (s *MemoryStore) Get(id int) (*Task, error) {
 
 func (s *MemoryStore) All() iter.Seq[*Task] {
 	return func(yield func(*Task) bool) {
-		for _, id := range slices.Sorted(maps.Keys(s.tasks)) {
-			if !yield(s.tasks[id]) {
+		// chụp lại danh sách task khi đang giữ khóa đọc...
+		s.mu.RLock()
+		ids := slices.Sorted(maps.Keys(s.tasks))
+		tasks := make([]*Task, len(ids))
+		for i, id := range ids {
+			tasks[i] = s.tasks[id]
+		}
+		s.mu.RUnlock()
+
+		// ...rồi mới yield, lúc này không giữ khóa nữa
+		for _, t := range tasks {
+			if !yield(t) {
 				return
 			}
 		}
@@ -92,13 +109,19 @@ func (s *MemoryStore) Load(path string) error {
 		return fmt.Errorf("đọc task từ %s: %w", path, err)
 	}
 
-	s.tasks = make(map[int]*Task, len(tasks))
-	s.nextID = 1
+	// dựng map mới bên ngoài khóa, chỉ khóa lúc thay vào store
+	m := make(map[int]*Task, len(tasks))
+	nextID := 1
 	for _, t := range tasks {
-		s.tasks[t.ID] = t
-		if t.ID >= s.nextID {
-			s.nextID = t.ID + 1
+		m[t.ID] = t
+		if t.ID >= nextID {
+			nextID = t.ID + 1
 		}
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tasks = m
+	s.nextID = nextID
 	return nil
 }
