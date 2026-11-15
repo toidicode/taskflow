@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Status là trạng thái của một task.
@@ -35,7 +36,9 @@ type Task struct {
 	Title       string
 	Description string
 	Status      Status
-	AssigneeID  int // 0 nghĩa là chưa giao cho ai
+	AssigneeID  int       // 0 nghĩa là chưa giao cho ai
+	DueDate     time.Time // zero value nghĩa là không có hạn
+	CompletedAt time.Time // zero value nghĩa là chưa xong
 }
 
 // ValidationError cho biết một field có giá trị không hợp lệ.
@@ -79,12 +82,18 @@ func (t *Task) Start() {
 	t.Status = StatusDoing
 }
 
-// Complete đánh dấu task đã xong.
+// Complete đánh dấu task đã xong và ghi lại thời điểm hoàn thành.
 func (t *Task) Complete() {
 	t.Status = StatusDone
+	t.CompletedAt = time.Now()
 }
 
 // IsDone cho biết task đã xong hay chưa.
 func (t *Task) IsDone() bool {
 	return t.Status == StatusDone
+}
+
+// IsOverdue cho biết tại thời điểm now task đã quá hạn mà chưa xong hay chưa.
+func (t *Task) IsOverdue(now time.Time) bool {
+	return !t.IsDone() && !t.DueDate.IsZero() && now.After(t.DueDate)
 }
