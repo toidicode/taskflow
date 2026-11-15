@@ -20,7 +20,7 @@ type Config struct {
 	ReadTimeout  time.Duration // đọc xong cả request
 	WriteTimeout time.Duration // ghi xong response
 	IdleTimeout  time.Duration // giữ kết nối keep-alive
-	DatabaseURL  string        // chuỗi kết nối PostgreSQL, dùng từ Bài 29 (chứa mật khẩu)
+	DatabaseURL  string        // chuỗi kết nối PostgreSQL (chứa mật khẩu), rỗng là dùng store trong bộ nhớ
 }
 
 // defaultConfig trả về cấu hình mặc định, đủ để chạy trên máy dev.

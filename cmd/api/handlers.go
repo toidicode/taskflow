@@ -11,7 +11,7 @@ import (
 )
 
 // newMux tạo ServeMux chứa các route của API.
-func newMux(projects *project.MemoryStore, tasks task.Store) *http.ServeMux {
+func newMux(projects project.Store, tasks task.Store) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 
@@ -35,7 +35,7 @@ func newMux(projects *project.MemoryStore, tasks task.Store) *http.ServeMux {
 }
 
 // newAPI bọc mux bằng các middleware dùng chung cho mọi route, theo thứ tự từ ngoài vào trong.
-func newAPI(projects *project.MemoryStore, tasks task.Store, corsOrigin string) http.Handler {
+func newAPI(projects project.Store, tasks task.Store, corsOrigin string) http.Handler {
 	return chain(newMux(projects, tasks),
 		requestID,    // ngoài cùng: các middleware sau đều đọc được ID
 		logRequests,  // log cả response 500 do recoverPanic trả về
@@ -62,11 +62,13 @@ func pathID(w http.ResponseWriter, r *http.Request) (int, bool) {
 	return id, true
 }
 
-// storeError trả 404 khi err là lỗi không tìm thấy, các lỗi khác là 500.
-func storeError(w http.ResponseWriter, err error) {
+// storeError trả 404 khi err là lỗi không tìm thấy. Lỗi khác (VD mất kết nối database)
+// được ghi log kèm request ID rồi trả 500, client không thấy chi tiết lỗi.
+func storeError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, task.ErrNotFound) || errors.Is(err, project.ErrNotFound) {
 		errorJSON(w, http.StatusNotFound, err.Error())
 		return
 	}
+	requestLogger(r).Error("store", "err", err)
 	errorJSON(w, http.StatusInternalServerError, "lỗi máy chủ")
 }

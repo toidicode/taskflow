@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -107,8 +108,7 @@ func (a *app) add(file string, args []string) error {
 	}
 	t.DueDate = due
 	err = update(file, func(s *task.MemoryStore) error {
-		s.Add(t)
-		return nil
+		return s.Add(context.Background(), t)
 	})
 	if err != nil {
 		return err
@@ -147,7 +147,9 @@ func (a *app) importTasks(file string, args []string) error {
 
 	err := update(file, func(s *task.MemoryStore) error {
 		for _, t := range tasks {
-			s.Add(t)
+			if err := s.Add(context.Background(), t); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -180,11 +182,13 @@ func (a *app) list(file string, args []string) error {
 	if err != nil {
 		return err
 	}
+	all, err := s.List(context.Background(), task.Filter{ProjectID: *projectID, Status: status})
+	if err != nil {
+		return err
+	}
 	now := a.now()
-	tasks := slices.Collect(filter(s.All(), func(t *task.Task) bool {
-		return (*projectID == 0 || t.ProjectID == *projectID) &&
-			(status == nil || t.Status == *status) &&
-			(!*overdue || t.IsOverdue(now))
+	tasks := slices.Collect(filter(slices.Values(all), func(t task.Task) bool {
+		return !*overdue || t.IsOverdue(now)
 	}))
 	printTasks(a.stdout, tasks, now)
 	return nil
@@ -201,9 +205,10 @@ func (a *app) setStatus(file, cmd string, args []string) error {
 		return err
 	}
 
-	var t *task.Task
+	var t task.Task
 	err = update(file, func(s *task.MemoryStore) error {
-		if t, err = s.Get(id); err != nil {
+		ctx := context.Background()
+		if t, err = s.Get(ctx, id); err != nil {
 			return err
 		}
 		if cmd == "start" {
@@ -211,7 +216,7 @@ func (a *app) setStatus(file, cmd string, args []string) error {
 		} else {
 			t.Complete()
 		}
-		return nil
+		return s.Update(ctx, &t) // Get trả về bản sao nên phải ghi lại
 	})
 	if err != nil {
 		return err
@@ -236,12 +241,13 @@ func (a *app) assign(file string, args []string) error {
 	}
 
 	err = update(file, func(s *task.MemoryStore) error {
-		t, err := s.Get(id)
+		ctx := context.Background()
+		t, err := s.Get(ctx, id)
 		if err != nil {
 			return err
 		}
 		t.Assign(*userID)
-		return nil
+		return s.Update(ctx, &t)
 	})
 	if err != nil {
 		return err

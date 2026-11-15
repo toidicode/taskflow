@@ -1,6 +1,7 @@
 package task_test
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -24,12 +25,15 @@ func newStore(t *testing.T, titles ...string) *task.MemoryStore {
 		if err != nil {
 			t.Fatalf("tạo task %q: %v", title, err)
 		}
-		s.Add(tk)
+		if err := s.Add(context.Background(), tk); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// chạy khi test (hoặc subtest) kết thúc: test hỏng thì in nội dung store
 	t.Cleanup(func() {
 		if t.Failed() {
-			for tk := range s.All() {
+			all, _ := s.List(context.Background(), task.Filter{})
+			for _, tk := range all {
 				t.Logf("store: #%d %q %v", tk.ID, tk.Title, tk.Status)
 			}
 		}
@@ -37,19 +41,25 @@ func newStore(t *testing.T, titles ...string) *task.MemoryStore {
 	return s
 }
 
-// titles trả về title của các task theo thứ tự All() trả ra.
-func titles(s *task.MemoryStore) []string {
+// titles trả về title của các task theo thứ tự List trả ra.
+func titles(t *testing.T, s *task.MemoryStore) []string {
+	t.Helper()
+	all, err := s.List(context.Background(), task.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	var out []string
-	for tk := range s.All() {
+	for _, tk := range all {
 		out = append(out, tk.Title)
 	}
 	return out
 }
 
 func TestMemoryStore_AddGet(t *testing.T) {
+	ctx := context.Background()
 	s := newStore(t, "Thiết kế database", "Viết API")
 
-	got, err := s.Get(2)
+	got, err := s.Get(ctx, 2)
 	if err != nil {
 		t.Fatalf("Get(2) lỗi: %v", err)
 	}
@@ -57,68 +67,97 @@ func TestMemoryStore_AddGet(t *testing.T) {
 		t.Errorf("Get(2) = #%d %q, muốn #2 %q", got.ID, got.Title, "Viết API")
 	}
 
-	_, err = s.Get(9)
+	_, err = s.Get(ctx, 9)
 	if !errors.Is(err, task.ErrNotFound) {
 		t.Errorf("Get(9) lỗi = %v, muốn wrap ErrNotFound", err)
 	}
 }
 
+func TestMemoryStore_Copies(t *testing.T) {
+	ctx := context.Background()
+	s := task.NewMemoryStore()
+	tk, _ := task.New(1, "Viết API")
+	_ = s.Add(ctx, tk)
+
+	// sửa task đã Add và task do Get trả về đều không đổi dữ liệu trong store
+	tk.Title = "sửa sau khi Add"
+	got, _ := s.Get(ctx, 1)
+	got.Start()
+	if again, _ := s.Get(ctx, 1); again.Title != "Viết API" || again.Status != task.StatusTodo {
+		t.Errorf("task trong store bị đổi: %q %v", again.Title, again.Status)
+	}
+}
+
 func TestMemoryStore_UpdateDelete(t *testing.T) {
+	ctx := context.Background()
 	s := newStore(t, "Thiết kế database", "Viết API")
 
-	// sửa trên bản sao rồi Update: task cũ trong store không bị đổi tại chỗ
-	old, _ := s.Get(2)
-	c := *old
+	c, _ := s.Get(ctx, 2)
 	c.Title = "Viết REST API"
-	if err := s.Update(&c); err != nil {
+	if err := s.Update(ctx, &c); err != nil {
 		t.Fatalf("Update() lỗi: %v", err)
 	}
-	if got, _ := s.Get(2); got.Title != "Viết REST API" || old.Title != "Viết API" {
-		t.Errorf("sau Update: store %q, bản cũ %q", got.Title, old.Title)
+	if got, _ := s.Get(ctx, 2); got.Title != "Viết REST API" {
+		t.Errorf("sau Update: %q", got.Title)
 	}
-	if err := s.Update(&task.Task{ID: 9}); !errors.Is(err, task.ErrNotFound) {
+	if err := s.Update(ctx, &task.Task{ID: 9}); !errors.Is(err, task.ErrNotFound) {
 		t.Errorf("Update(#9) lỗi = %v, muốn wrap ErrNotFound", err)
 	}
 
-	if err := s.Delete(1); err != nil {
+	if err := s.Delete(ctx, 1); err != nil {
 		t.Fatalf("Delete(1) lỗi: %v", err)
 	}
-	if got := titles(s); !slices.Equal(got, []string{"Viết REST API"}) {
+	if got := titles(t, s); !slices.Equal(got, []string{"Viết REST API"}) {
 		t.Errorf("sau Delete: %v", got)
 	}
-	if err := s.Delete(1); !errors.Is(err, task.ErrNotFound) {
+	if err := s.Delete(ctx, 1); !errors.Is(err, task.ErrNotFound) {
 		t.Errorf("Delete(1) lần hai lỗi = %v, muốn wrap ErrNotFound", err)
 	}
 }
 
-func TestMemoryStore_All(t *testing.T) {
+func TestMemoryStore_List(t *testing.T) {
+	ctx := context.Background()
 	s := newStore(t, "a", "b", "c", "d")
+	other, _ := task.New(2, "e")
+	_ = s.Add(ctx, other)
+	b, _ := s.Get(ctx, 2)
+	b.SetStatus(task.StatusDone)
+	_ = s.Update(ctx, &b)
 
-	t.Run("theo thứ tự ID", func(t *testing.T) {
-		want := []string{"a", "b", "c", "d"}
-		if got := titles(s); !slices.Equal(got, want) {
-			t.Errorf("All() = %v, muốn %v", got, want)
-		}
-	})
-
-	t.Run("dừng sớm", func(t *testing.T) {
-		var got []int
-		for tk := range s.All() {
-			got = append(got, tk.ID)
-			if tk.ID == 2 {
-				break // iterator gọi yield sau khi đã trả về false sẽ làm test panic
+	done := task.StatusDone
+	tests := []struct {
+		name string
+		f    task.Filter
+		want []int
+	}{
+		{"không lọc, theo thứ tự ID", task.Filter{}, []int{1, 2, 3, 4, 5}},
+		{"theo project", task.Filter{ProjectID: 2}, []int{5}},
+		{"theo trạng thái", task.Filter{Status: &done}, []int{2}},
+		{"cả hai", task.Filter{ProjectID: 2, Status: &done}, []int{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			list, err := s.List(ctx, tt.f)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		if !slices.Equal(got, []int{1, 2}) {
-			t.Errorf("duyệt được %v, muốn [1 2]", got)
-		}
-	})
+			ids := []int{}
+			for _, tk := range list {
+				ids = append(ids, tk.ID)
+			}
+			if !slices.Equal(ids, tt.want) {
+				t.Errorf("List(%+v) = %v, muốn %v", tt.f, ids, tt.want)
+			}
+		})
+	}
 }
 
 func TestMemoryStore_SaveLoad(t *testing.T) {
+	ctx := context.Background()
 	s := newStore(t, "Thiết kế database", "Viết API", "Viết tài liệu")
-	design, _ := s.Get(1)
+	design, _ := s.Get(ctx, 1)
 	design.Complete()
+	_ = s.Update(ctx, &design)
 
 	// thư mục tạm riêng cho test này, tự xóa khi test kết thúc
 	path := filepath.Join(t.TempDir(), "tasks.json")
@@ -138,16 +177,16 @@ func TestMemoryStore_SaveLoad(t *testing.T) {
 	if err := loaded.Load(path); err != nil {
 		t.Fatalf("Load() lỗi: %v", err)
 	}
-	if got, want := titles(loaded), titles(s); !slices.Equal(got, want) {
+	if got, want := titles(t, loaded), titles(t, s); !slices.Equal(got, want) {
 		t.Errorf("sau Load: %v, muốn %v", got, want)
 	}
-	if got, _ := loaded.Get(1); !got.IsDone() || !got.CompletedAt.Equal(design.CompletedAt) {
+	if got, _ := loaded.Get(ctx, 1); !got.IsDone() || !got.CompletedAt.Equal(design.CompletedAt) {
 		t.Errorf("task #1 sau Load: %v, %v; muốn done, %v", got.Status, got.CompletedAt, design.CompletedAt)
 	}
 
 	// task thêm sau Load phải nhận ID tiếp theo, không đè lên task cũ
 	tk, _ := task.New(1, "Deploy")
-	loaded.Add(tk)
+	_ = loaded.Add(ctx, tk)
 	if tk.ID != 4 {
 		t.Errorf("ID của task mới = %d, muốn 4", tk.ID)
 	}
@@ -158,7 +197,7 @@ func TestMemoryStore_LoadError(t *testing.T) {
 
 	t.Run("chưa có file", func(t *testing.T) {
 		err := task.NewMemoryStore().Load(filepath.Join(dir, "khong-co.json"))
-		if !errors.Is(err, fs.ErrNotExist) { // main dựa vào lỗi này để tạo task mẫu
+		if !errors.Is(err, fs.ErrNotExist) { // CLI dựa vào lỗi này để bắt đầu với store rỗng
 			t.Errorf("Load() lỗi = %v, muốn wrap fs.ErrNotExist", err)
 		}
 	})
@@ -176,36 +215,42 @@ func TestMemoryStore_LoadError(t *testing.T) {
 
 func TestMemoryStore_Concurrent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
 		s := task.NewMemoryStore()
+		first, _ := task.New(1, "Viết API")
+		_ = s.Add(ctx, first)
+
 		var wg sync.WaitGroup
-		for range 50 {
+		for i := range 50 {
 			wg.Go(func() {
 				tk, _ := task.New(1, "Viết API")
-				s.Add(tk)
+				_ = s.Add(ctx, tk)
 			})
 			wg.Go(func() {
-				for tk := range s.All() { // đọc trong lúc các goroutine khác ghi
-					_, _ = s.Get(tk.ID)
-				}
+				// đọc rồi sửa bản sao của cùng một task: không còn data race như ở Bài 18
+				tk, _ := s.Get(ctx, 1)
+				tk.Assign(i + 1)
+				_ = s.Update(ctx, &tk)
 			})
 		}
 		wg.Wait()
 
-		if n := len(s.List()); n != 50 {
-			t.Errorf("số task = %d, muốn 50", n)
+		if all, _ := s.List(ctx, task.Filter{}); len(all) != 51 {
+			t.Errorf("số task = %d, muốn 51", len(all))
 		}
 	})
 }
 
 func BenchmarkMemoryStore_Get(b *testing.B) {
+	ctx := context.Background()
 	s := task.NewMemoryStore()
 	for range 1000 {
 		tk, _ := task.New(1, "Viết API")
-		s.Add(tk)
+		_ = s.Add(ctx, tk)
 	}
 
 	for b.Loop() { // chỉ phần trong vòng lặp được đo
-		if _, err := s.Get(500); err != nil {
+		if _, err := s.Get(ctx, 500); err != nil {
 			b.Fatal(err)
 		}
 	}

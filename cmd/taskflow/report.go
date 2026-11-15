@@ -12,7 +12,7 @@ import (
 )
 
 // printTasks in danh sách tasks ra w, kèm dòng tổng kết; quá hạn tính tại thời điểm now.
-func printTasks(w io.Writer, tasks []*task.Task, now time.Time) {
+func printTasks(w io.Writer, tasks []task.Task, now time.Time) {
 	if len(tasks) == 0 {
 		fmt.Fprintln(w, "Không có task nào")
 		return
@@ -22,11 +22,11 @@ func printTasks(w io.Writer, tasks []*task.Task, now time.Time) {
 			t.ID, t.ProjectID, t.Title, t.Status, assigneeText(t), dueText(t, now))
 	}
 
-	done := slices.Collect(filter(slices.Values(tasks), func(t *task.Task) bool { return t.IsDone() }))
-	overdue := slices.Collect(filter(slices.Values(tasks), func(t *task.Task) bool { return t.IsOverdue(now) }))
+	done := slices.Collect(filter(slices.Values(tasks), func(t task.Task) bool { return t.IsDone() }))
+	overdue := slices.Collect(filter(slices.Values(tasks), func(t task.Task) bool { return t.IsOverdue(now) }))
 	fmt.Fprintf(w, "Đã xong %d/%d task, quá hạn %d task\n", len(done), len(tasks), len(overdue))
 	if len(overdue) > 0 {
-		titles := mapSeq(slices.Values(overdue), func(t *task.Task) string { return t.Title })
+		titles := mapSeq(slices.Values(overdue), func(t task.Task) string { return t.Title })
 		fmt.Fprintln(w, "Cần xử lý gấp:", strings.Join(slices.Collect(titles), ", "))
 	}
 }
@@ -54,7 +54,7 @@ func mapSeq[T, U any](seq iter.Seq[T], f func(T) U) iter.Seq[U] {
 }
 
 // assigneeText mô tả người nhận task t, VD "user #2".
-func assigneeText(t *task.Task) string {
+func assigneeText(t task.Task) string {
 	if t.AssigneeID == 0 {
 		return "-"
 	}
@@ -62,7 +62,7 @@ func assigneeText(t *task.Task) string {
 }
 
 // dueText mô tả hạn của task t, VD "hạn 14/11/2026 (quá hạn)".
-func dueText(t *task.Task, now time.Time) string {
+func dueText(t task.Task, now time.Time) string {
 	if t.DueDate.IsZero() {
 		return "không có hạn"
 	}

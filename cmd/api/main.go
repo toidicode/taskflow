@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/toidicode/taskflow/internal/postgres"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
 )
@@ -31,10 +33,9 @@ func main() {
 	slog.SetDefault(logger) // các hàm slog.Info, slog.Error... và package log đều đi qua logger này
 	slog.Info("đã đọc cấu hình", "config", cfg)
 
-	projects := project.NewMemoryStore()
-	tasks := task.NewMemoryStore()
-	if err := seed(projects, tasks); err != nil {
-		slog.Error("tạo dữ liệu mẫu", "err", err)
+	projects, tasks, err := openStores(context.Background(), cfg)
+	if err != nil {
+		slog.Error("khởi tạo store", "err", err)
 		os.Exit(1)
 	}
 
@@ -69,10 +70,29 @@ func newServer(cfg Config, h http.Handler) *http.Server {
 	}
 }
 
-// seed thêm vài project và task mẫu. Từ Bài 29 dữ liệu sẽ nằm trong PostgreSQL.
-func seed(projects *project.MemoryStore, tasks task.Store) error {
-	projects.Add(project.New("TaskFlow API", 1)) // project #1
-	projects.Add(project.New("Website giới thiệu", 1))
+// openStores dùng PostgreSQL khi có DATABASE_URL. Không có thì dùng store trong bộ nhớ
+// kèm dữ liệu mẫu, đủ để chạy thử mà chưa cần database.
+func openStores(ctx context.Context, cfg Config) (project.Store, task.Store, error) {
+	if cfg.DatabaseURL == "" {
+		slog.Warn("chưa đặt DATABASE_URL, dữ liệu chỉ nằm trong bộ nhớ")
+		projects, tasks := project.NewMemoryStore(), task.NewMemoryStore()
+		return projects, tasks, seed(ctx, projects, tasks)
+	}
+	db, err := postgres.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("kết nối PostgreSQL: %w", err)
+	}
+	slog.Info("đã kết nối PostgreSQL")
+	return postgres.NewProjectStore(db), postgres.NewTaskStore(db), nil
+}
+
+// seed thêm vài project và task mẫu cho store trong bộ nhớ.
+func seed(ctx context.Context, projects project.Store, tasks task.Store) error {
+	for _, name := range []string{"TaskFlow API", "Website giới thiệu"} {
+		if err := projects.Add(ctx, project.New(name, 1)); err != nil {
+			return err
+		}
+	}
 
 	samples := []struct {
 		projectID int
@@ -89,13 +109,10 @@ func seed(projects *project.MemoryStore, tasks task.Store) error {
 		if err != nil {
 			return err
 		}
-		switch x.status {
-		case task.StatusDoing:
-			t.Start()
-		case task.StatusDone:
-			t.Complete()
+		t.SetStatus(x.status)
+		if err := tasks.Add(ctx, t); err != nil {
+			return err
 		}
-		tasks.Add(t)
 	}
 	return nil
 }

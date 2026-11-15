@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"maps"
 	"net/http"
@@ -16,7 +17,7 @@ import (
 func newTestStores(t *testing.T) (*project.MemoryStore, *task.MemoryStore) {
 	t.Helper()
 	projects, tasks := project.NewMemoryStore(), task.NewMemoryStore()
-	if err := seed(projects, tasks); err != nil {
+	if err := seed(context.Background(), projects, tasks); err != nil {
 		t.Fatal(err)
 	}
 	return projects, tasks
@@ -227,6 +228,19 @@ func TestTaskCRUD(t *testing.T) {
 		!strings.Contains(body, `"completed_at":"`) || !strings.Contains(body, `"title":"Viết README"`) {
 		t.Errorf("PATCH: %d %s", rec.Code, body)
 	}
+	// due_date: null xóa hạn, không gửi due_date thì giữ nguyên
+	rec = send(mux, "PATCH", "/api/v1/tasks/5", `{"title": "Viết README.md"}`)
+	if !strings.Contains(rec.Body.String(), `"due_date":"2026-11-30T17:00:00+07:00"`) {
+		t.Errorf("PATCH không gửi due_date: %d %s", rec.Code, rec.Body)
+	}
+	rec = send(mux, "PATCH", "/api/v1/tasks/5", `{"due_date": null}`)
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "due_date") {
+		t.Errorf("PATCH due_date null: %d %s", rec.Code, rec.Body)
+	}
+	rec = send(mux, "PATCH", "/api/v1/tasks/5", `{"due_date": "30/11/2026"}`)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "cannot parse") {
+		t.Errorf("PATCH due_date sai định dạng: %d %s", rec.Code, rec.Body)
+	}
 	rec = send(mux, "PATCH", "/api/v1/tasks/5", `{"status": "xong"}`)
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), `trạng thái \"xong\" không hợp lệ`) {
 		t.Errorf("PATCH status sai: %d %s", rec.Code, rec.Body)
@@ -307,5 +321,28 @@ func TestWriteJSONError(t *testing.T) {
 	}
 	if e := logEntries(t, logs); len(e) != 1 || e[0]["msg"] != "writeJSON" || e[0]["level"] != "ERROR" {
 		t.Errorf("log = %v, muốn một dòng ERROR writeJSON", e)
+	}
+}
+
+// brokenTasks là task.Store luôn lỗi khi liệt kê, giả lập database mất kết nối.
+// Các method khác lấy từ interface nhúng (nil), test không được gọi tới.
+type brokenTasks struct{ task.Store }
+
+func (brokenTasks) List(context.Context, task.Filter) ([]task.Task, error) {
+	return nil, errors.New("liệt kê task: kết nối bị đóng")
+}
+
+func TestStoreError(t *testing.T) {
+	logs := captureLog(t)
+	projects, _ := newTestStores(t)
+	mux := newMux(projects, brokenTasks{})
+
+	rec := send(mux, "GET", "/api/v1/tasks", "")
+	if rec.Code != http.StatusInternalServerError || rec.Body.String() != `{"error":"lỗi máy chủ"}`+"\n" {
+		t.Errorf("GET: %d %s", rec.Code, rec.Body)
+	}
+	// chi tiết lỗi chỉ nằm trong log, không gửi cho client
+	if e := logEntries(t, logs); len(e) != 1 || e[0]["msg"] != "store" || e[0]["err"] != "liệt kê task: kết nối bị đóng" {
+		t.Errorf("log = %v", e)
 	}
 }
