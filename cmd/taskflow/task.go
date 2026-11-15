@@ -37,10 +37,9 @@ type Task struct {
 	AssigneeID  int // 0 nghĩa là chưa giao cho ai
 }
 
-// NewTask tạo một task mới ở trạng thái todo.
-func NewTask(id, projectID int, title string) *Task {
+// NewTask tạo một task mới ở trạng thái todo, ID do TaskStore cấp khi thêm task.
+func NewTask(projectID int, title string) *Task {
 	return &Task{
-		ID:        id,
 		ProjectID: projectID,
 		Title:     strings.TrimSpace(title),
 		Status:    StatusTodo,
@@ -65,14 +64,4 @@ func (t *Task) Complete() {
 // IsDone cho biết task đã xong hay chưa.
 func (t *Task) IsDone() bool {
 	return t.Status == StatusDone
-}
-
-// FindTask trả về task có id cần tìm trong tasks, không thấy thì trả về nil.
-func FindTask(tasks []*Task, id int) *Task {
-	for _, t := range tasks {
-		if t.ID == id {
-			return t
-		}
-	}
-	return nil
 }
