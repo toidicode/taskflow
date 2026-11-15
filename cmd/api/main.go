@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
 )
 
@@ -14,12 +15,13 @@ func main() {
 	addr := flag.String("addr", ":8080", "địa chỉ server lắng nghe, dạng host:port")
 	flag.Parse()
 
-	store := task.NewMemoryStore()
-	if err := seed(store); err != nil {
+	projects := project.NewMemoryStore()
+	tasks := task.NewMemoryStore()
+	if err := seed(projects, tasks); err != nil {
 		log.Fatal(err)
 	}
 
-	srv := newServer(*addr, newMux(store))
+	srv := newServer(*addr, newMux(projects, tasks))
 	log.Printf("TaskFlow API lắng nghe tại %s", *addr)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
@@ -38,8 +40,11 @@ func newServer(addr string, h http.Handler) *http.Server {
 	}
 }
 
-// seed thêm vài task mẫu vào store. Từ Bài 29 dữ liệu sẽ nằm trong PostgreSQL.
-func seed(s task.Store) error {
+// seed thêm vài project và task mẫu. Từ Bài 29 dữ liệu sẽ nằm trong PostgreSQL.
+func seed(projects *project.MemoryStore, tasks task.Store) error {
+	projects.Add(project.New(1, "TaskFlow API", 1))
+	projects.Add(project.New(2, "Website giới thiệu", 1))
+
 	samples := []struct {
 		projectID int
 		title     string
@@ -61,7 +66,7 @@ func seed(s task.Store) error {
 		case task.StatusDone:
 			t.Complete()
 		}
-		s.Add(t)
+		tasks.Add(t)
 	}
 	return nil
 }
