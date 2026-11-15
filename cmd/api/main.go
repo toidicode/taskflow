@@ -87,6 +87,7 @@ func openStores(ctx context.Context, cfg Config) (stores, error) {
 	if cfg.DatabaseURL == "" {
 		slog.Warn("chưa đặt DATABASE_URL, dữ liệu chỉ nằm trong bộ nhớ")
 		projects, tasks := project.NewMemoryStore(), task.NewMemoryStore()
+		tasks.SetProjectFunc(projectLookup(projects)) // để lọc task theo quyền (Filter.VisibleTo)
 		s := stores{projects: projects, tasks: tasks, users: user.NewMemoryStore()}
 		return s, seed(ctx, projects, tasks)
 	}
@@ -116,6 +117,14 @@ func openStores(ctx context.Context, cfg Config) (stores, error) {
 		tasks:    postgres.NewTaskStore(db),
 		users:    postgres.NewUserStore(db),
 	}, nil
+}
+
+// projectLookup cho task.MemoryStore đọc project trong store projects.
+func projectLookup(projects project.Store) task.ProjectFunc {
+	return func(id int) (project.Project, bool) {
+		p, err := projects.Get(context.Background(), id)
+		return p, err == nil
+	}
 }
 
 // migrate chạy mọi migration chưa chạy trên database ở url và ghi log từng migration.

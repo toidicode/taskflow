@@ -14,6 +14,7 @@ func TestMemoryStore(t *testing.T) {
 	api := project.New("TaskFlow API", 1)
 	_ = s.Add(ctx, api)
 	_ = s.Add(ctx, project.New("Website giới thiệu", 1))
+	_ = s.Add(ctx, project.New("App của Bình", 2))
 
 	if api.ID != 1 {
 		t.Errorf("Add() cấp ID %d, muốn 1", api.ID)
@@ -26,9 +27,13 @@ func TestMemoryStore(t *testing.T) {
 		t.Errorf("Get(9) err = %v, muốn ErrNotFound", err)
 	}
 
-	list, err := s.List(ctx)
+	// List chỉ trả về project của một user
+	list, err := s.List(ctx, 1)
 	if err != nil || len(list) != 2 || list[0].ID != 1 || list[1].ID != 2 {
-		t.Errorf("List() = %v, %v; muốn ID [1 2]", list, err)
+		t.Errorf("List(1) = %v, %v; muốn ID [1 2]", list, err)
+	}
+	if list, _ := s.List(ctx, 3); list == nil || len(list) != 0 {
+		t.Errorf("List(3) = %#v, muốn slice rỗng khác nil", list)
 	}
 }
 

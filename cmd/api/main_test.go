@@ -24,6 +24,7 @@ import (
 func newTestStores(t *testing.T) stores {
 	t.Helper()
 	projects, tasks, users := project.NewMemoryStore(), task.NewMemoryStore(), user.NewMemoryStore()
+	tasks.SetProjectFunc(projectLookup(projects))
 	if err := seed(context.Background(), projects, tasks); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +260,9 @@ func TestValidatorAddError(t *testing.T) {
 }
 
 func TestTaskCRUD(t *testing.T) {
-	mux := newTestMux(t)
+	s := newTestStores(t)
+	addUsers(t, s, "Bình") // user #2, để giao task
+	mux := newMux(s, testTokens)
 
 	// các bước chạy lần lượt trên cùng một store
 	rec := send(mux, "POST", "/api/v1/tasks", `{"project_id": 2, "title": " Viết README ", "due_date": "2026-11-30T17:00:00+07:00"}`)
@@ -319,30 +322,32 @@ func TestProjectCRUD(t *testing.T) {
 		t.Fatalf("POST: %d %q %s", rec.Code, rec.Header().Get("Location"), rec.Body)
 	}
 
-	rec = send(mux, "PUT", "/api/v1/projects/3", `{"name": "App mobile v2", "description": "iOS và Android"}`)
+	rec = sendAs(mux, 2, "PUT", "/api/v1/projects/3", `{"name": "App mobile v2", "description": "iOS và Android"}`)
 	if want := `{"id":3,"name":"App mobile v2","description":"iOS và Android","owner_id":2}` + "\n"; rec.Code != 200 || rec.Body.String() != want {
 		t.Errorf("PUT: %d %s", rec.Code, rec.Body)
 	}
-	if rec = send(mux, "PUT", "/api/v1/projects/9", `{"name": "x"}`); rec.Code != http.StatusNotFound {
+	if rec = sendAs(mux, 2, "PUT", "/api/v1/projects/9", `{"name": "x"}`); rec.Code != http.StatusNotFound {
 		t.Errorf("PUT project không có: %d", rec.Code)
 	}
 
-	if rec = send(mux, "DELETE", "/api/v1/projects/3", ""); rec.Code != http.StatusNoContent {
+	if rec = sendAs(mux, 2, "DELETE", "/api/v1/projects/3", ""); rec.Code != http.StatusNoContent {
 		t.Errorf("DELETE: %d %s", rec.Code, rec.Body)
 	}
-	if rec = send(mux, "GET", "/api/v1/projects/3", ""); rec.Code != http.StatusNotFound {
+	if rec = sendAs(mux, 2, "GET", "/api/v1/projects/3", ""); rec.Code != http.StatusNotFound {
 		t.Errorf("GET sau DELETE: %d", rec.Code)
 	}
 }
 
 func TestGetTaskPathValue(t *testing.T) {
-	tasks := newTestStores(t).tasks
+	s := newTestStores(t)
 
-	// gọi thẳng handler, không qua ServeMux nên phải tự đặt wildcard {id}
+	// gọi thẳng handler, không qua ServeMux nên phải tự đặt wildcard {id},
+	// không qua requireAuth nên phải tự gắn user #1 vào context
 	req := httptest.NewRequest(http.MethodGet, "/bat-ky", nil)
 	req.SetPathValue("id", "3")
+	req = req.WithContext(context.WithValue(req.Context(), userIDKey, 1))
 	rec := httptest.NewRecorder()
-	getTask(tasks).ServeHTTP(rec, req)
+	getTask(s).ServeHTTP(rec, req)
 
 	if want := `{"id":3,"project_id":1,"title":"Viết test cho API","status":"todo"}` + "\n"; rec.Body.String() != want {
 		t.Errorf("body = %q, muốn %q", rec.Body.String(), want)

@@ -43,12 +43,12 @@ func newMux(s stores, tokens *auth.Tokens) *http.ServeMux {
 	api("GET", "/projects/{id}/tasks", listProjectTasks(s.projects, s.tasks))
 
 	api("GET", "/tasks", listTasks(s.tasks))
-	api("POST", "/tasks", createTask(s.projects, s.tasks))
-	api("GET", "/tasks/{id}", getTask(s.tasks))
-	api("PATCH", "/tasks/{id}", updateTask(s.projects, s.tasks))
-	api("DELETE", "/tasks/{id}", deleteTask(s.tasks))
-	api("POST", "/tasks/{id}/tags", addTaskTag(s.tasks))
-	api("DELETE", "/tasks/{id}/tags/{name}", removeTaskTag(s.tasks))
+	api("POST", "/tasks", createTask(s))
+	api("GET", "/tasks/{id}", getTask(s))
+	api("PATCH", "/tasks/{id}", updateTask(s))
+	api("DELETE", "/tasks/{id}", deleteTask(s))
+	api("POST", "/tasks/{id}/tags", addTaskTag(s))
+	api("DELETE", "/tasks/{id}/tags/{name}", removeTaskTag(s))
 	return mux
 }
 

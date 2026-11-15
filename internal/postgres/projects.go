@@ -8,6 +8,7 @@ import (
 
 	"github.com/toidicode/taskflow/internal/postgres/dbgen"
 	"github.com/toidicode/taskflow/internal/project"
+	"github.com/toidicode/taskflow/internal/user"
 )
 
 // ProjectStore lưu project trong bảng projects qua code do sqlc sinh ra, cài interface project.Store.
@@ -31,6 +32,9 @@ func (s *ProjectStore) Add(ctx context.Context, p *project.Project) error {
 		Description: p.Description,
 		OwnerID:     int64(p.OwnerID),
 	})
+	if isForeignKeyViolation(err) { // khóa ngoại projects.owner_id: không có user này
+		return fmt.Errorf("user #%d: %w", p.OwnerID, user.ErrNotFound)
+	}
 	if err != nil {
 		return fmt.Errorf("thêm project: %w", err)
 	}
@@ -52,11 +56,11 @@ func (s *ProjectStore) Get(ctx context.Context, id int) (project.Project, error)
 	return toProject(row), nil
 }
 
-func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
+func (s *ProjectStore) List(ctx context.Context, ownerID int) ([]project.Project, error) {
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
-	rows, err := s.q.ListProjects(ctx)
+	rows, err := s.q.ListProjects(ctx, int64(ownerID))
 	if err != nil {
 		return nil, fmt.Errorf("liệt kê project: %w", err)
 	}
@@ -77,6 +81,9 @@ func (s *ProjectStore) Update(ctx context.Context, p *project.Project) error {
 		Description: p.Description,
 		OwnerID:     int64(p.OwnerID),
 	})
+	if isForeignKeyViolation(err) {
+		return fmt.Errorf("user #%d: %w", p.OwnerID, user.ErrNotFound)
+	}
 	if err != nil {
 		return fmt.Errorf("sửa project #%d: %w", p.ID, err)
 	}

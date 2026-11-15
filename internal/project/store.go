@@ -27,8 +27,9 @@ type Store interface {
 	Update(ctx context.Context, p *Project) error
 	// Delete xóa project có id cần xóa, lỗi wrap ErrNotFound khi không có project đó.
 	Delete(ctx context.Context, id int) error
-	// List trả về mọi project, sắp xếp theo ID.
-	List(ctx context.Context) ([]Project, error)
+	// List trả về các project của user ownerID, sắp xếp theo ID. Không có cách liệt kê
+	// project của mọi user: API chỉ cho mỗi user thấy project của mình.
+	List(ctx context.Context, ownerID int) ([]Project, error)
 }
 
 // MemoryStore lưu project trong bộ nhớ, dùng được từ nhiều goroutine.
@@ -85,12 +86,14 @@ func (s *MemoryStore) Get(ctx context.Context, id int) (Project, error) {
 	return p, nil
 }
 
-func (s *MemoryStore) List(ctx context.Context) ([]Project, error) {
+func (s *MemoryStore) List(ctx context.Context, ownerID int) ([]Project, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ps := []Project{} // JSON là [] thay vì null
 	for p := range maps.Values(s.projects) {
-		ps = append(ps, p)
+		if p.OwnerID == ownerID {
+			ps = append(ps, p)
+		}
 	}
 	slices.SortFunc(ps, func(a, b Project) int { return cmp.Compare(a.ID, b.ID) })
 	return ps, nil

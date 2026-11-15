@@ -10,6 +10,8 @@ import (
 	"os"
 	"slices"
 	"sync"
+
+	"github.com/toidicode/taskflow/internal/project"
 )
 
 // ErrNotFound được trả về (đã wrap) khi không có task cần tìm.
@@ -22,6 +24,7 @@ type Filter struct {
 	Tag       string  // "": không lọc theo tag
 	AfterID   int     // chỉ lấy task có ID lớn hơn AfterID (phân trang theo cursor)
 	Limit     int     // số task tối đa, 0: không giới hạn
+	VisibleTo int     // chỉ lấy task mà user này được xem (CanView), 0: không lọc (chỉ dùng ngoài API)
 }
 
 // Match cho biết t có thỏa các điều kiện lọc của f không (không tính Limit).
@@ -58,9 +61,33 @@ type Store interface {
 // Map chứa giá trị Task: mọi method đều chép task ra/vào (kể cả slice Tags),
 // bên ngoài không giữ được con trỏ tới dữ liệu của store.
 type MemoryStore struct {
-	mu     sync.RWMutex // bảo vệ tasks và nextID
-	tasks  map[int]Task
-	nextID int
+	mu        sync.RWMutex // bảo vệ các field bên dưới
+	tasks     map[int]Task
+	nextID    int
+	projectOf ProjectFunc // tìm project của task khi lọc theo Filter.VisibleTo
+}
+
+// ProjectFunc trả về project có ID projectID, false khi không có project đó.
+type ProjectFunc func(projectID int) (project.Project, bool)
+
+// SetProjectFunc cho MemoryStore cách tìm project của một task. Task không lưu chủ project,
+// nên thiếu f thì List với Filter.VisibleTo chỉ trả về task được giao cho user đó.
+func (s *MemoryStore) SetProjectFunc(f ProjectFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.projectOf = f
+}
+
+// visible cho biết user userID có được xem t không, userID 0 là không lọc. s.mu phải đang được khóa.
+func (s *MemoryStore) visible(userID int, t Task) bool {
+	if userID == 0 {
+		return true
+	}
+	var p project.Project
+	if s.projectOf != nil {
+		p, _ = s.projectOf(t.ProjectID) // không có project thì p rỗng, chỉ còn quyền của người được giao
+	}
+	return CanView(userID, p, t)
 }
 
 // Kiểm tra lúc biên dịch: *MemoryStore phải thỏa mãn Store.
@@ -124,7 +151,7 @@ func (s *MemoryStore) List(ctx context.Context, f Filter) ([]Task, error) {
 	defer s.mu.RUnlock()
 	tasks := []Task{} // không phải nil slice: không có task thì JSON là [] thay vì null
 	for t := range maps.Values(s.tasks) {
-		if f.Match(t) {
+		if f.Match(t) && s.visible(f.VisibleTo, t) {
 			tasks = append(tasks, clone(t))
 		}
 	}

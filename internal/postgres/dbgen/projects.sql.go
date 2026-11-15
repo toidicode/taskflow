@@ -60,11 +60,13 @@ func (q *Queries) GetProject(ctx context.Context, id int64) (Project, error) {
 
 const listProjects = `-- name: ListProjects :many
 SELECT id, name, description, owner_id FROM projects
+WHERE owner_id = $1
 ORDER BY id
 `
 
-func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
-	rows, err := q.db.QueryContext(ctx, listProjects)
+// Chỉ project của một user: không có truy vấn nào liệt kê project của mọi người.
+func (q *Queries) ListProjects(ctx context.Context, ownerID int64) ([]Project, error) {
+	rows, err := q.db.QueryContext(ctx, listProjects, ownerID)
 	if err != nil {
 		return nil, err
 	}

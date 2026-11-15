@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
+	"github.com/toidicode/taskflow/internal/user"
 )
 
 // projectInput là body của POST /projects và PUT /projects/{id}.
@@ -26,10 +28,10 @@ func (in *projectInput) validate(v validator) {
 	v.check(utf8.RuneCountInString(in.Description) <= 2000, "description", "tối đa 2000 ký tự")
 }
 
-// listProjects liệt kê mọi project.
+// listProjects liệt kê các project của user đang đăng nhập.
 func listProjects(store project.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		projects, err := store.List(r.Context())
+		projects, err := store.List(r.Context(), userIDFrom(r.Context()))
 		if err != nil {
 			storeError(w, r, err)
 			return
@@ -48,7 +50,12 @@ func createProject(store project.Store) http.HandlerFunc {
 		}
 		p := project.New(in.Name, userIDFrom(r.Context())) // chủ project là người tạo
 		p.Description = in.Description
-		if err := store.Add(r.Context(), p); err != nil {
+		err := store.Add(r.Context(), p)
+		if errors.Is(err, user.ErrNotFound) { // khóa ngoại owner_id: token còn hạn nhưng user đã bị xóa
+			unauthorized(w, true, "tài khoản không còn tồn tại")
+			return
+		}
+		if err != nil {
 			storeError(w, r, err)
 			return
 		}
@@ -65,9 +72,8 @@ func getProject(store project.Store) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		p, err := store.Get(r.Context(), id)
-		if err != nil {
-			storeError(w, r, err)
+		p, ok := loadProject(w, r, store, id)
+		if !ok {
 			return
 		}
 		writeJSON(w, http.StatusOK, p)
@@ -85,9 +91,8 @@ func replaceProject(store project.Store) http.HandlerFunc {
 		if !decodeValid(w, r, &in) {
 			return
 		}
-		old, err := store.Get(r.Context(), id)
-		if err != nil {
-			storeError(w, r, err)
+		old, ok := loadProject(w, r, store, id)
+		if !ok {
 			return
 		}
 		p := project.New(in.Name, old.OwnerID)
@@ -107,8 +112,7 @@ func deleteProject(projects project.Store, tasks task.Store) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		if _, err := projects.Get(r.Context(), id); err != nil {
-			storeError(w, r, err)
+		if _, ok := loadProject(w, r, projects, id); !ok {
 			return
 		}
 		ts, err := tasks.List(r.Context(), task.Filter{ProjectID: id, Limit: 1}) // chỉ cần biết còn task không
@@ -136,8 +140,7 @@ func listProjectTasks(projects project.Store, tasks task.Store) http.HandlerFunc
 		if !ok {
 			return
 		}
-		if _, err := projects.Get(r.Context(), id); err != nil {
-			storeError(w, r, err)
+		if _, ok := loadProject(w, r, projects, id); !ok {
 			return
 		}
 		writeTasks(w, r, tasks, id)

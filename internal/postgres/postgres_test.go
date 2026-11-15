@@ -52,10 +52,24 @@ func openEmptyDB(t *testing.T) *sql.DB {
 	return db
 }
 
+// addUsers thêm các user tên names vào bảng users, user đầu tiên có ID 1.
+// Từ migration 00005, owner_id và assignee_id phải là ID của user có thật.
+func addUsers(t *testing.T, db *sql.DB, names ...string) {
+	t.Helper()
+	users := postgres.NewUserStore(db)
+	for _, name := range names {
+		u := &user.User{Email: strings.ToLower(name) + "@example.com", Name: name, PasswordHash: "$2a$12$hash-gia"}
+		if err := users.Add(context.Background(), u); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestTaskStore(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 	projects, tasks := postgres.NewProjectStore(db), postgres.NewTaskStore(db)
+	addUsers(t, db, "An", "Binh") // chủ project và người được giao
 
 	p := project.New("TaskFlow API", 1)
 	if err := projects.Add(ctx, p); err != nil {
@@ -166,6 +180,7 @@ func TestTaskTags(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 	projects, tasks := postgres.NewProjectStore(db), postgres.NewTaskStore(db)
+	addUsers(t, db, "An")
 	p := project.New("TaskFlow API", 1)
 	if err := projects.Add(ctx, p); err != nil {
 		t.Fatal(err)
@@ -260,11 +275,12 @@ func TestProjectStore(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 	s := postgres.NewProjectStore(db)
+	addUsers(t, db, "An", "Binh", "Chi")
 
-	if list, err := s.List(ctx); err != nil || list == nil {
-		t.Errorf("List() khi chưa có project = %#v, %v; muốn slice rỗng khác nil", list, err)
+	if list, err := s.List(ctx, 1); err != nil || list == nil {
+		t.Errorf("List(1) khi chưa có project = %#v, %v; muốn slice rỗng khác nil", list, err)
 	}
-	for _, name := range []string{"TaskFlow API", "Website giới thiệu"} {
+	for _, name := range []string{"TaskFlow API", "Website giới thiệu", "App mobile"} {
 		if err := s.Add(ctx, project.New(name, 1)); err != nil {
 			t.Fatal(err)
 		}
@@ -273,9 +289,20 @@ func TestProjectStore(t *testing.T) {
 	if err := s.Update(ctx, &p); err != nil {
 		t.Fatal(err)
 	}
-	list, err := s.List(ctx)
-	if err != nil || len(list) != 2 || list[0].Name != "TaskFlow API" || list[1] != p {
-		t.Errorf("List() = %+v, %v", list, err)
+	// List chỉ trả về project của một user
+	list, err := s.List(ctx, 1)
+	if err != nil || len(list) != 2 || list[0].Name != "TaskFlow API" || list[1].Name != "App mobile" {
+		t.Errorf("List(1) = %+v, %v", list, err)
+	}
+	if list, err := s.List(ctx, 3); err != nil || len(list) != 1 || list[0] != p {
+		t.Errorf("List(3) = %+v, %v", list, err)
+	}
+	// khóa ngoại projects.owner_id (migration 00005): chủ project phải là user có thật
+	if err := s.Add(ctx, project.New("Mồ côi", 99)); !errors.Is(err, user.ErrNotFound) {
+		t.Errorf("Add(owner #99) lỗi = %v, muốn user.ErrNotFound", err)
+	}
+	if err := s.Update(ctx, &project.Project{ID: 1, Name: "x", OwnerID: 99}); !errors.Is(err, user.ErrNotFound) {
+		t.Errorf("Update(owner #99) lỗi = %v, muốn user.ErrNotFound", err)
 	}
 
 	if err := s.Delete(ctx, 1); err != nil {

@@ -8,7 +8,9 @@ SELECT * FROM projects
 WHERE id = $1;
 
 -- name: ListProjects :many
+-- Chỉ project của một user: không có truy vấn nào liệt kê project của mọi người.
 SELECT * FROM projects
+WHERE owner_id = $1
 ORDER BY id;
 
 -- name: UpdateProject :execrows

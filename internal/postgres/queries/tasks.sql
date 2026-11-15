@@ -17,6 +17,11 @@ WHERE (sqlc.narg(project_id)::bigint IS NULL OR project_id = sqlc.narg(project_i
         SELECT 1 FROM task_tags tt JOIN tags tg ON tg.id = tt.tag_id
         WHERE tt.task_id = tasks.id AND tg.name = sqlc.narg(tag)))
   AND tasks.id > @after_id
+  -- visible_to: chỉ task mà user được xem, cùng luật với task.CanView (chủ project hoặc người được giao)
+  AND (sqlc.narg(visible_to)::bigint IS NULL
+       OR tasks.assignee_id = sqlc.narg(visible_to)
+       OR EXISTS (SELECT 1 FROM projects p
+                  WHERE p.id = tasks.project_id AND p.owner_id = sqlc.narg(visible_to)))
 ORDER BY tasks.id
 LIMIT sqlc.narg(max_rows);
 

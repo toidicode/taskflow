@@ -83,8 +83,13 @@ WHERE ($1::bigint IS NULL OR project_id = $1)
         SELECT 1 FROM task_tags tt JOIN tags tg ON tg.id = tt.tag_id
         WHERE tt.task_id = tasks.id AND tg.name = $3))
   AND tasks.id > $4
+  -- visible_to: chỉ task mà user được xem, cùng luật với task.CanView (chủ project hoặc người được giao)
+  AND ($5::bigint IS NULL
+       OR tasks.assignee_id = $5
+       OR EXISTS (SELECT 1 FROM projects p
+                  WHERE p.id = tasks.project_id AND p.owner_id = $5))
 ORDER BY tasks.id
-LIMIT $5
+LIMIT $6
 `
 
 type ListTasksParams struct {
@@ -92,6 +97,7 @@ type ListTasksParams struct {
 	Status    sql.NullString
 	Tag       sql.NullString
 	AfterID   int64
+	VisibleTo sql.NullInt64
 	MaxRows   sql.NullInt32
 }
 
@@ -103,6 +109,7 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 		arg.Status,
 		arg.Tag,
 		arg.AfterID,
+		arg.VisibleTo,
 		arg.MaxRows,
 	)
 	if err != nil {

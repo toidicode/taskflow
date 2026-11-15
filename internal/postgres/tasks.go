@@ -9,6 +9,7 @@ import (
 	"github.com/toidicode/taskflow/internal/postgres/dbgen"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
+	"github.com/toidicode/taskflow/internal/user"
 )
 
 // TaskStore lưu task trong bảng tasks (tag trong tags và task_tags) qua code do sqlc sinh ra,
@@ -27,7 +28,8 @@ func NewTaskStore(db *sql.DB) *TaskStore {
 
 // Add thêm task và các tag của nó trong cùng một transaction:
 // một câu lỗi thì không có gì được ghi lại, kể cả task.
-// Không có project t.ProjectID (VD vừa bị xóa) thì lỗi wrap project.ErrNotFound.
+// Không có project t.ProjectID (VD vừa bị xóa) thì lỗi wrap project.ErrNotFound,
+// không có user t.AssigneeID thì lỗi wrap user.ErrNotFound.
 func (s *TaskStore) Add(ctx context.Context, t *task.Task) error {
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
@@ -45,22 +47,40 @@ func (s *TaskStore) Add(ctx context.Context, t *task.Task) error {
 			DueDate:     nullTime(t.DueDate),
 			CompletedAt: nullTime(t.CompletedAt),
 		})
-		if isForeignKeyViolation(err) { // khóa ngoại tasks.project_id: không có project này
-			return project.ErrNotFound
-		}
 		if err != nil {
-			return err
+			return taskFKError(err)
 		}
 		return setTags(ctx, q, id, t.Tags)
 	})
-	if errors.Is(err, project.ErrNotFound) {
-		return fmt.Errorf("project #%d: %w", t.ProjectID, err)
-	}
 	if err != nil {
-		return fmt.Errorf("thêm task: %w", err)
+		return wrapTaskError(err, t, "thêm task")
 	}
 	t.ID = int(id) // chỉ ghi ID khi transaction đã commit
 	return nil
+}
+
+// taskFKError đổi lỗi vi phạm khóa ngoại khi ghi bảng tasks sang lỗi của domain theo tên khóa ngoại:
+// tasks.project_id → project.ErrNotFound, tasks.assignee_id → user.ErrNotFound. Lỗi khác giữ nguyên.
+func taskFKError(err error) error {
+	switch violatedForeignKey(err) {
+	case "tasks_project_id_fkey":
+		return project.ErrNotFound
+	case "tasks_assignee_id_fkey":
+		return user.ErrNotFound
+	}
+	return err
+}
+
+// wrapTaskError thêm ngữ cảnh cho lỗi của Add/Update: "project #N: ..." hoặc "user #N: ..."
+// cho lỗi khóa ngoại, "<action>: ..." cho lỗi khác.
+func wrapTaskError(err error, t *task.Task, action string) error {
+	switch {
+	case errors.Is(err, project.ErrNotFound):
+		return fmt.Errorf("project #%d: %w", t.ProjectID, err)
+	case errors.Is(err, user.ErrNotFound):
+		return fmt.Errorf("user #%d: %w", t.AssigneeID, err)
+	}
+	return fmt.Errorf("%s: %w", action, err)
 }
 
 // setTags thay toàn bộ tag của task taskID bằng names. q phải chạy trong một transaction.
@@ -105,6 +125,7 @@ func (s *TaskStore) List(ctx context.Context, f task.Filter) ([]task.Task, error
 		Tag:       sql.NullString{String: f.Tag, Valid: f.Tag != ""},
 		AfterID:   int64(f.AfterID),
 		MaxRows:   sql.NullInt32{Int32: int32(f.Limit), Valid: f.Limit > 0}, // NULL: không có LIMIT
+		VisibleTo: nullInt(f.VisibleTo),                                     // NULL: không lọc theo quyền
 	}
 	if f.Status != nil { // NULL: không lọc theo trạng thái
 		params.Status = sql.NullString{String: f.Status.String(), Valid: true}
@@ -149,7 +170,7 @@ func (s *TaskStore) withTags(ctx context.Context, rows []dbgen.Task) ([]task.Tas
 }
 
 // Update sửa task và thay toàn bộ tag của nó bằng t.Tags trong cùng một transaction.
-// Không có project t.ProjectID (VD vừa bị xóa) thì lỗi wrap project.ErrNotFound.
+// Lỗi khóa ngoại giống Add (project.ErrNotFound, user.ErrNotFound).
 func (s *TaskStore) Update(ctx context.Context, t *task.Task) error {
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
@@ -166,11 +187,8 @@ func (s *TaskStore) Update(ctx context.Context, t *task.Task) error {
 			DueDate:     nullTime(t.DueDate),
 			CompletedAt: nullTime(t.CompletedAt),
 		})
-		if isForeignKeyViolation(err) {
-			return project.ErrNotFound
-		}
 		if err != nil {
-			return err
+			return taskFKError(err)
 		}
 		if n == 0 { // không có hàng nào có id này
 			return task.ErrNotFound
@@ -180,11 +198,8 @@ func (s *TaskStore) Update(ctx context.Context, t *task.Task) error {
 	if errors.Is(err, task.ErrNotFound) {
 		return fmt.Errorf("task #%d: %w", t.ID, err)
 	}
-	if errors.Is(err, project.ErrNotFound) {
-		return fmt.Errorf("project #%d: %w", t.ProjectID, err)
-	}
 	if err != nil {
-		return fmt.Errorf("sửa task #%d: %w", t.ID, err)
+		return wrapTaskError(err, t, fmt.Sprintf("sửa task #%d", t.ID))
 	}
 	return nil
 }
