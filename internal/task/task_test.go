@@ -40,6 +40,7 @@ func TestNew(t *testing.T) {
 		{name: "title rỗng", projectID: 1, title: "   ", wantErr: "title: không được để trống"},
 		{name: "project_id bằng 0", projectID: 0, title: "Viết API", wantErr: "project_id: phải lớn hơn 0"},
 		{name: "sai cả hai", projectID: -1, title: "", wantErr: "project_id: phải lớn hơn 0\ntitle: không được để trống"},
+		{name: "title quá dài", projectID: 1, title: strings.Repeat("á", 201), wantErr: "title: tối đa 200 ký tự"},
 	}
 
 	for _, tt := range tests {
@@ -64,6 +65,26 @@ func TestNew(t *testing.T) {
 				t.Errorf("New() lỗi không chứa *ValidationError")
 			}
 		})
+	}
+}
+
+func TestValidate(t *testing.T) {
+	valid := task.Task{ProjectID: 1, Title: "Viết API", Description: strings.Repeat("a", task.MaxDescriptionLen)}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate() task hợp lệ lỗi: %v", err)
+	}
+
+	bad := task.Task{Title: strings.Repeat("á", task.MaxTitleLen+1), Description: strings.Repeat("a", task.MaxDescriptionLen+1), AssigneeID: -1}
+	err := bad.Validate()
+	want := "project_id: phải lớn hơn 0\ntitle: tối đa 200 ký tự\ndescription: tối đa 2000 ký tự\nassignee_id: không được âm"
+	if err == nil || err.Error() != want {
+		t.Fatalf("Validate() = %v, muốn %q", err, want)
+	}
+	// mọi lỗi con đều là *ValidationError để API trả về theo từng field
+	for _, e := range err.(interface{ Unwrap() []error }).Unwrap() {
+		if _, ok := e.(*task.ValidationError); !ok {
+			t.Errorf("lỗi %v có kiểu %T, muốn *task.ValidationError", e, e)
+		}
 	}
 }
 

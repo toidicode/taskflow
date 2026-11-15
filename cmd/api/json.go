@@ -30,9 +30,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Write(append(data, '\n'))
 }
 
-// errorJSON trả lỗi theo định dạng chung của API: {"error": "..."}.
+// errorResponse là định dạng lỗi chung của API. Fields chỉ có ở lỗi validate:
+// {"error": "dữ liệu không hợp lệ", "fields": {"title": "không được để trống"}}.
+type errorResponse struct {
+	Error  string            `json:"error"`
+	Fields map[string]string `json:"fields,omitempty"`
+}
+
+// errorJSON trả lỗi không gắn với field nào: {"error": "..."}.
 func errorJSON(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
+	writeJSON(w, status, errorResponse{Error: message})
 }
 
 // readJSON đọc body của r (một JSON object) vào dst, trả lỗi có thông báo dễ hiểu cho client.

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,10 +53,10 @@ func TestRoutes(t *testing.T) {
 		{"project không có", "GET", "/api/v1/projects/9/tasks", 404, `{"error":"project #9: không tìm thấy"}`, ""},
 		{"tất cả task", "GET", "/api/v1/tasks", 200, `"title":"Viết tài liệu","status":"todo"}]`, ""},
 		{"lọc status", "GET", "/api/v1/tasks?status=doing", 200, `[{"id":2,"project_id":1,"title":"Viết API danh sách task","status":"doing"}]`, ""},
-		{"status sai", "GET", "/api/v1/tasks?status=xong", 400, `{"error":"trạng thái \"xong\" không hợp lệ`, ""},
+		{"status sai", "GET", "/api/v1/tasks?status=xong", 400, `{"error":"tham số không hợp lệ","fields":{"status":"trạng thái \"xong\" không hợp lệ`, ""},
 		{"một task", "GET", "/api/v1/tasks/2", 200, `{"id":2,"project_id":1,"title":"Viết API danh sách task","status":"doing"}` + "\n", ""},
 		{"HEAD dùng route GET", "HEAD", "/api/v1/tasks/2", 200, "", ""},
-		{"id không phải số", "GET", "/api/v1/tasks/abc", 400, `{"error":"id \"abc\" không hợp lệ`, ""},
+		{"id không phải số", "GET", "/api/v1/tasks/abc", 400, `{"error":"tham số không hợp lệ","fields":{"id":"cần một số nguyên dương, nhận \"abc\""}}`, ""},
 		{"task không có", "GET", "/api/v1/tasks/99", 404, `{"error":"task #99: không tìm thấy"}`, ""},
 		{"xóa task không có", "DELETE", "/api/v1/tasks/99", 404, `{"error":"task #99: không tìm thấy"}`, ""},
 		{"xóa project còn task", "DELETE", "/api/v1/projects/1", 409, `{"error":"project #1 vẫn còn task`, ""},
@@ -97,8 +99,6 @@ func TestReadJSONErrors(t *testing.T) {
 		{"field lạ", `{"projectId": 1}`, 400, `không hỗ trợ field \"projectId\"`},
 		{"thừa dữ liệu", `{"project_id": 1, "title": "a"} {}`, 400, "chỉ được chứa một JSON object"},
 		{"quá lớn", `{"title": "` + strings.Repeat("a", maxBodyBytes) + `"}`, 413, "body vượt quá 1048576 byte"},
-		{"lỗi validate", `{"project_id": 0, "title": " "}`, 400, `project_id: phải lớn hơn 0\ntitle: không được để trống`},
-		{"project không có", `{"project_id": 9, "title": "Viết API"}`, 400, "project_id: không có project #9"},
 	}
 
 	for _, tt := range tests {
@@ -128,6 +128,85 @@ func TestReadJSONErrors(t *testing.T) {
 	})
 }
 
+func TestValidation(t *testing.T) {
+	mux := newMux(newTestStores(t))
+	long := func(n int) string { return strings.Repeat("á", n) } // chuỗi n ký tự (2n byte)
+
+	tests := []struct {
+		name     string
+		method   string
+		target   string
+		body     string
+		wantCode int
+		wantBody string // body JSON của response, so sánh chính xác
+	}{
+		{"task thiếu project và title", "POST", "/api/v1/tasks", `{"project_id": 0, "title": " "}`, 422,
+			`{"error":"dữ liệu không hợp lệ","fields":{"project_id":"phải lớn hơn 0","title":"không được để trống"}}`},
+		{"task của project không có", "POST", "/api/v1/tasks", `{"project_id": 9, "title": "Viết API"}`, 422,
+			`{"error":"dữ liệu không hợp lệ","fields":{"project_id":"không có project #9"}}`},
+		{"task quá dài, assignee âm", "POST", "/api/v1/tasks",
+			`{"project_id": 1, "title": "` + long(201) + `", "description": "` + long(2001) + `", "assignee_id": -1}`, 422,
+			`{"error":"dữ liệu không hợp lệ","fields":{"assignee_id":"không được âm","description":"tối đa 2000 ký tự","title":"tối đa 200 ký tự"}}`},
+		{"PATCH title rỗng", "PATCH", "/api/v1/tasks/1", `{"title": "  "}`, 422,
+			`{"error":"dữ liệu không hợp lệ","fields":{"title":"không được để trống"}}`},
+		{"PATCH assignee âm", "PATCH", "/api/v1/tasks/1", `{"assignee_id": -2}`, 422,
+			`{"error":"dữ liệu không hợp lệ","fields":{"assignee_id":"không được âm"}}`},
+		{"PATCH id sai", "PATCH", "/api/v1/tasks/0", `{"title": "x"}`, 400,
+			`{"error":"tham số không hợp lệ","fields":{"id":"cần một số nguyên dương, nhận \"0\""}}`},
+		{"project rỗng", "POST", "/api/v1/projects", `{}`, 422,
+			`{"error":"dữ liệu không hợp lệ","fields":{"name":"không được để trống","owner_id":"phải lớn hơn 0"}}`},
+		{"tên project quá dài", "POST", "/api/v1/projects", `{"name": "` + long(101) + `", "owner_id": 1}`, 422,
+			`{"error":"dữ liệu không hợp lệ","fields":{"name":"tối đa 100 ký tự"}}`},
+		{"PUT project tên trống", "PUT", "/api/v1/projects/1", `{"name": " ", "owner_id": 1}`, 422,
+			`{"error":"dữ liệu không hợp lệ","fields":{"name":"không được để trống"}}`},
+		{"sai kiểu vẫn là 400", "POST", "/api/v1/projects", `{"name": 1, "owner_id": 1}`, 400,
+			`{"error":"field \"name\" sai kiểu, cần string"}`},
+		{"status trên query sai", "GET", "/api/v1/projects/1/tasks?status=xong", "", 400,
+			`{"error":"tham số không hợp lệ","fields":{"status":"trạng thái \"xong\" không hợp lệ, chọn todo, doing hoặc done"}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := send(mux, tt.method, tt.target, tt.body)
+			if rec.Code != tt.wantCode {
+				t.Errorf("status = %d, muốn %d", rec.Code, tt.wantCode)
+			}
+			if got := rec.Body.String(); got != tt.wantBody+"\n" {
+				t.Errorf("body = %s, muốn %s", got, tt.wantBody)
+			}
+		})
+	}
+
+	// dữ liệu hợp lệ ở đúng giới hạn: 200 ký tự cho title, 100 cho tên project
+	if rec := send(mux, "POST", "/api/v1/tasks", `{"project_id": 1, "title": "`+long(200)+`"}`); rec.Code != http.StatusCreated {
+		t.Errorf("title 200 ký tự: %d %s", rec.Code, rec.Body)
+	}
+	if rec := send(mux, "POST", "/api/v1/projects", `{"name": "`+long(100)+`", "owner_id": 1}`); rec.Code != http.StatusCreated {
+		t.Errorf("tên project 100 ký tự: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestValidatorAddError(t *testing.T) {
+	v := validator{}
+	other := errors.New("mất kết nối")
+	err := errors.Join(
+		&task.ValidationError{Field: "title", Message: "không được để trống"},
+		errors.Join(&task.ValidationError{Field: "project_id", Message: "phải lớn hơn 0"}, other), // lỗi gộp lồng nhau
+		&task.ValidationError{Field: "title", Message: "lỗi thứ hai bị bỏ qua"},
+	)
+
+	rest := v.addError(err)
+	if want := (validator{"title": "không được để trống", "project_id": "phải lớn hơn 0"}); !maps.Equal(v, want) {
+		t.Errorf("v = %v, muốn %v", v, want)
+	}
+	if !errors.Is(rest, other) || rest.Error() != "mất kết nối" {
+		t.Errorf("lỗi còn lại = %v, muốn chỉ có %v", rest, other)
+	}
+	if rest := v.addError(nil); rest != nil {
+		t.Errorf("addError(nil) = %v", rest)
+	}
+}
+
 func TestTaskCRUD(t *testing.T) {
 	mux := newMux(newTestStores(t))
 
@@ -153,7 +232,7 @@ func TestTaskCRUD(t *testing.T) {
 		t.Errorf("PATCH status sai: %d %s", rec.Code, rec.Body)
 	}
 	rec = send(mux, "PATCH", "/api/v1/tasks/5", `{"title": ""}`)
-	if rec.Code != 400 {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("PATCH title rỗng: %d %s", rec.Code, rec.Body)
 	}
 
@@ -179,7 +258,7 @@ func TestProjectCRUD(t *testing.T) {
 	if want := `{"id":3,"name":"App mobile v2","description":"iOS và Android","owner_id":2}` + "\n"; rec.Code != 200 || rec.Body.String() != want {
 		t.Errorf("PUT: %d %s", rec.Code, rec.Body)
 	}
-	if rec = send(mux, "PUT", "/api/v1/projects/9", `{"name": "x"}`); rec.Code != http.StatusNotFound {
+	if rec = send(mux, "PUT", "/api/v1/projects/9", `{"name": "x", "owner_id": 1}`); rec.Code != http.StatusNotFound {
 		t.Errorf("PUT project không có: %d", rec.Code)
 	}
 

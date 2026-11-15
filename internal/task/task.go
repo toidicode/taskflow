@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Status là trạng thái của một task.
@@ -82,25 +83,43 @@ func (e *ValidationError) Error() string {
 	return e.Field + ": " + e.Message
 }
 
+// Giới hạn độ dài (tính theo ký tự) của title và description.
+const (
+	MaxTitleLen       = 200
+	MaxDescriptionLen = 2000
+)
+
 // New tạo một task mới ở trạng thái todo, ID do Store cấp khi thêm task.
-// Dữ liệu không hợp lệ thì trả về các *ValidationError gộp bằng errors.Join.
+// Dữ liệu không hợp lệ thì trả về lỗi của Validate.
 func New(projectID int, title string) (*Task, error) {
-	title = strings.TrimSpace(title)
-	var errs []error
-	if projectID <= 0 {
-		errs = append(errs, &ValidationError{Field: "project_id", Message: "phải lớn hơn 0"})
-	}
-	if title == "" {
-		errs = append(errs, &ValidationError{Field: "title", Message: "không được để trống"})
-	}
-	if len(errs) > 0 {
-		return nil, errors.Join(errs...)
-	}
-	return &Task{
+	t := &Task{
 		ProjectID: projectID,
-		Title:     title,
+		Title:     strings.TrimSpace(title),
 		Status:    StatusTodo,
-	}, nil
+	}
+	if err := t.Validate(); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// Validate kiểm tra các quy tắc mà task nào cũng phải thỏa, dù được tạo từ API, CLI hay file.
+// Lỗi trả về chỉ gồm các *ValidationError gộp bằng errors.Join, nil nếu task hợp lệ.
+func (t *Task) Validate() error {
+	var errs []error
+	check := func(ok bool, field, message string) {
+		if !ok {
+			errs = append(errs, &ValidationError{Field: field, Message: message})
+		}
+	}
+	title := strings.TrimSpace(t.Title)
+	check(t.ProjectID > 0, "project_id", "phải lớn hơn 0")
+	check(title != "", "title", "không được để trống")
+	check(utf8.RuneCountInString(title) <= MaxTitleLen, "title", fmt.Sprintf("tối đa %d ký tự", MaxTitleLen))
+	check(utf8.RuneCountInString(t.Description) <= MaxDescriptionLen, "description",
+		fmt.Sprintf("tối đa %d ký tự", MaxDescriptionLen))
+	check(t.AssigneeID >= 0, "assignee_id", "không được âm")
+	return errors.Join(errs...)
 }
 
 // Assign giao task cho người dùng có id là userID.

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
@@ -14,6 +16,15 @@ type projectInput struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	OwnerID     int    `json:"owner_id"`
+}
+
+// validate kiểm tra body của project, cài interface validatable.
+func (in *projectInput) validate(v validator) {
+	name := strings.TrimSpace(in.Name)
+	v.check(name != "", "name", "không được để trống")
+	v.check(utf8.RuneCountInString(name) <= 100, "name", "tối đa 100 ký tự")
+	v.check(utf8.RuneCountInString(in.Description) <= 2000, "description", "tối đa 2000 ký tự")
+	v.check(in.OwnerID > 0, "owner_id", "phải lớn hơn 0")
 }
 
 // listProjects liệt kê mọi project.
@@ -29,8 +40,7 @@ func listProjects(store *project.MemoryStore) http.HandlerFunc {
 func createProject(store *project.MemoryStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in projectInput
-		if err := readJSON(w, r, &in); err != nil {
-			bodyError(w, err)
+		if !decodeValid(w, r, &in) {
 			return
 		}
 		p := project.New(in.Name, in.OwnerID)
@@ -45,9 +55,8 @@ func createProject(store *project.MemoryStore) http.HandlerFunc {
 // getProject trả về project có ID là wildcard {id}.
 func getProject(store *project.MemoryStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
-		if err != nil {
-			errorJSON(w, http.StatusBadRequest, err.Error())
+		id, ok := pathID(w, r)
+		if !ok {
 			return
 		}
 		p, err := store.Get(id)
@@ -62,14 +71,12 @@ func getProject(store *project.MemoryStore) http.HandlerFunc {
 // replaceProject thay toàn bộ nội dung project {id} bằng body JSON (PUT).
 func replaceProject(store *project.MemoryStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
-		if err != nil {
-			errorJSON(w, http.StatusBadRequest, err.Error())
+		id, ok := pathID(w, r)
+		if !ok {
 			return
 		}
 		var in projectInput
-		if err := readJSON(w, r, &in); err != nil {
-			bodyError(w, err)
+		if !decodeValid(w, r, &in) {
 			return
 		}
 		p := project.New(in.Name, in.OwnerID)
@@ -85,9 +92,8 @@ func replaceProject(store *project.MemoryStore) http.HandlerFunc {
 // deleteProject xóa project {id} khi project không còn task nào, trả 204.
 func deleteProject(projects *project.MemoryStore, tasks task.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
-		if err != nil {
-			errorJSON(w, http.StatusBadRequest, err.Error())
+		id, ok := pathID(w, r)
+		if !ok {
 			return
 		}
 		if _, err := projects.Get(id); err != nil {
@@ -111,9 +117,8 @@ func deleteProject(projects *project.MemoryStore, tasks task.Store) http.Handler
 // listProjectTasks liệt kê task của project {id}, lọc được theo ?status= như listTasks.
 func listProjectTasks(projects *project.MemoryStore, tasks task.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
-		if err != nil {
-			errorJSON(w, http.StatusBadRequest, err.Error())
+		id, ok := pathID(w, r)
+		if !ok {
 			return
 		}
 		if _, err := projects.Get(id); err != nil {

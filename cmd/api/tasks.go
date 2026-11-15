@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -42,7 +43,7 @@ func writeTasks(w http.ResponseWriter, r *http.Request, store task.Store, projec
 	if s := r.URL.Query().Get("status"); s != "" {
 		status, err := task.ParseStatus(s)
 		if err != nil {
-			errorJSON(w, http.StatusBadRequest, err.Error())
+			badParamsJSON(w, validator{"status": err.Error()})
 			return
 		}
 		match = func(t *task.Task) bool { return t.Status == status }
@@ -66,16 +67,17 @@ func createTask(projects *project.MemoryStore, store task.Store) http.HandlerFun
 			bodyError(w, err)
 			return
 		}
-		t, err := task.New(in.ProjectID, in.Title)
-		if err != nil {
-			errorJSON(w, http.StatusBadRequest, err.Error()) // Bài 27 chuẩn hóa lỗi validate
+		t := &task.Task{
+			ProjectID:   in.ProjectID,
+			Title:       strings.TrimSpace(in.Title),
+			Description: in.Description,
+			Status:      task.StatusTodo,
+			AssigneeID:  in.AssigneeID,
+			DueDate:     in.DueDate,
+		}
+		if !validTask(w, projects, t) {
 			return
 		}
-		if _, err := projects.Get(in.ProjectID); err != nil {
-			errorJSON(w, http.StatusBadRequest, fmt.Sprintf("project_id: không có project #%d", in.ProjectID))
-			return
-		}
-		t.Description, t.AssigneeID, t.DueDate = in.Description, in.AssigneeID, in.DueDate
 		store.Add(t)
 
 		w.Header().Set("Location", fmt.Sprintf("/api/v1/tasks/%d", t.ID))
@@ -83,12 +85,32 @@ func createTask(projects *project.MemoryStore, store task.Store) http.HandlerFun
 	}
 }
 
+// validTask kiểm tra t theo quy tắc của domain (t.Validate) và kiểm tra project của t có tồn tại.
+// t không hợp lệ thì ghi response 422 với lỗi của mọi field rồi trả về false.
+func validTask(w http.ResponseWriter, projects *project.MemoryStore, t *task.Task) bool {
+	v := validator{}
+	if err := v.addError(t.Validate()); err != nil {
+		log.Printf("validTask: %v", err) // Validate chỉ trả lỗi validate, tới đây là bug
+		errorJSON(w, http.StatusInternalServerError, "lỗi máy chủ")
+		return false
+	}
+	if t.ProjectID > 0 {
+		if _, err := projects.Get(t.ProjectID); err != nil {
+			v.check(false, "project_id", fmt.Sprintf("không có project #%d", t.ProjectID))
+		}
+	}
+	if len(v) > 0 {
+		invalidJSON(w, v)
+		return false
+	}
+	return true
+}
+
 // getTask trả về task có ID là wildcard {id}.
 func getTask(store task.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
-		if err != nil {
-			errorJSON(w, http.StatusBadRequest, err.Error())
+		id, ok := pathID(w, r)
+		if !ok {
 			return
 		}
 		t, err := store.Get(id)
@@ -101,11 +123,10 @@ func getTask(store task.Store) http.HandlerFunc {
 }
 
 // updateTask sửa một phần task {id} (PATCH): chỉ những field có trong body.
-func updateTask(store task.Store) http.HandlerFunc {
+func updateTask(projects *project.MemoryStore, store task.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
-		if err != nil {
-			errorJSON(w, http.StatusBadRequest, err.Error())
+		id, ok := pathID(w, r)
+		if !ok {
 			return
 		}
 		var in updateTaskInput
@@ -122,10 +143,6 @@ func updateTask(store task.Store) http.HandlerFunc {
 		t := *old // sửa trên bản sao, request khác có thể đang đọc *old
 		if in.Title != nil {
 			t.Title = strings.TrimSpace(*in.Title)
-			if t.Title == "" {
-				errorJSON(w, http.StatusBadRequest, "title: không được để trống")
-				return
-			}
 		}
 		if in.Description != nil {
 			t.Description = *in.Description
@@ -139,6 +156,9 @@ func updateTask(store task.Store) http.HandlerFunc {
 		if in.Status != nil {
 			t.SetStatus(*in.Status)
 		}
+		if !validTask(w, projects, &t) { // kiểm tra cả task sau khi sửa, không chỉ field được gửi
+			return
+		}
 
 		if err := store.Update(&t); err != nil {
 			storeError(w, err)
@@ -151,9 +171,8 @@ func updateTask(store task.Store) http.HandlerFunc {
 // deleteTask xóa task {id}, thành công thì trả 204 không có body.
 func deleteTask(store task.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
-		if err != nil {
-			errorJSON(w, http.StatusBadRequest, err.Error())
+		id, ok := pathID(w, r)
+		if !ok {
 			return
 		}
 		if err := store.Delete(id); err != nil {

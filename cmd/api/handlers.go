@@ -29,7 +29,7 @@ func newMux(projects *project.MemoryStore, tasks task.Store) *http.ServeMux {
 	api("GET", "/tasks", listTasks(tasks))
 	api("POST", "/tasks", createTask(projects, tasks))
 	api("GET", "/tasks/{id}", getTask(tasks))
-	api("PATCH", "/tasks/{id}", updateTask(tasks))
+	api("PATCH", "/tasks/{id}", updateTask(projects, tasks))
 	api("DELETE", "/tasks/{id}", deleteTask(tasks))
 	return mux
 }
@@ -51,13 +51,15 @@ func health(w http.ResponseWriter, r *http.Request) {
 }
 
 // pathID đọc wildcard {id} trên path và đổi sang số nguyên dương.
-func pathID(r *http.Request) (int, error) {
+// id sai thì ghi response 400 và trả về false.
+func pathID(w http.ResponseWriter, r *http.Request) (int, bool) {
 	s := r.PathValue("id")
 	id, err := strconv.Atoi(s)
 	if err != nil || id < 1 {
-		return 0, fmt.Errorf("id %q không hợp lệ, cần một số nguyên dương", s)
+		badParamsJSON(w, validator{"id": fmt.Sprintf("cần một số nguyên dương, nhận %q", s)})
+		return 0, false
 	}
-	return id, nil
+	return id, true
 }
 
 // storeError trả 404 khi err là lỗi không tìm thấy, các lỗi khác là 500.
