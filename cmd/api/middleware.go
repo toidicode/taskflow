@@ -25,7 +25,10 @@ func chain(h http.Handler, mws ...middleware) http.Handler {
 // không thể tạo ra key trùng với key của package này.
 type ctxKey int
 
-const requestIDKey ctxKey = iota
+const (
+	requestIDKey ctxKey = iota
+	userIDKey           // ID của user đã đăng nhập, do requireAuth gắn vào
+)
 
 // requestID gắn cho mỗi request một ID: lấy từ header X-Request-ID nếu hợp lệ,
 // không thì tự sinh. ID được lưu vào context và trả lại trong header của response.
@@ -161,7 +164,7 @@ func cors(origin string) middleware {
 			// preflight: trình duyệt hỏi trước khi gửi request "không đơn giản"
 			if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 				h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE")
-				h.Set("Access-Control-Allow-Headers", "Content-Type, X-Request-ID")
+				h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-ID")
 				h.Set("Access-Control-Max-Age", "600") // trình duyệt nhớ kết quả 10 phút
 				w.WriteHeader(http.StatusNoContent)
 				return

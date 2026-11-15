@@ -258,8 +258,7 @@ func TestCORS(t *testing.T) {
 
 func TestNewAPI(t *testing.T) {
 	logs := captureLog(t)
-	projects, tasks := newTestStores(t)
-	api := newAPI(projects, tasks, "http://localhost:5173")
+	api := newAPI(newTestStores(t), testTokens, "http://localhost:5173")
 
 	rec := send(api, "GET", "/api/v1/tasks/2", "")
 	id := rec.Header().Get("X-Request-ID")
@@ -279,5 +278,9 @@ func TestNewAPI(t *testing.T) {
 	api.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("preflight: status = %d, muốn 204", rec.Code)
+	}
+	// trình duyệt chỉ gửi header Authorization khi preflight cho phép
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Authorization") {
+		t.Errorf("Allow-Headers = %q, thiếu Authorization", got)
 	}
 }

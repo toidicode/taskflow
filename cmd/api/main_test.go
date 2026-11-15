@@ -11,26 +11,59 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
+	"github.com/toidicode/taskflow/internal/user"
 )
 
-// newTestStores tạo hai store đã có dữ liệu mẫu như khi chạy server.
-func newTestStores(t *testing.T) (*project.MemoryStore, *task.MemoryStore) {
+// newTestStores tạo các store đã có dữ liệu mẫu như khi chạy server, cộng thêm user #1 (An)
+// là chủ của hai project mẫu.
+func newTestStores(t *testing.T) stores {
 	t.Helper()
-	projects, tasks := project.NewMemoryStore(), task.NewMemoryStore()
+	projects, tasks, users := project.NewMemoryStore(), task.NewMemoryStore(), user.NewMemoryStore()
 	if err := seed(context.Background(), projects, tasks); err != nil {
 		t.Fatal(err)
 	}
-	return projects, tasks
+	if err := users.Add(context.Background(), &user.User{Email: "an@example.com", Name: "An"}); err != nil {
+		t.Fatal(err)
+	}
+	return stores{projects: projects, tasks: tasks, users: users}
 }
 
-// send gửi request tới h, body khác rỗng thì gửi kèm Content-Type: application/json.
+// testTokens phát và kiểm tra token trong test, secret này chỉ dùng cho test.
+var testTokens = auth.NewTokens([]byte("secret-chi-dung-trong-test-0123456789"), 15*time.Minute)
+
+// authorize gắn access token của user userID vào header Authorization của req.
+func authorize(req *http.Request, userID int) {
+	token, err := testTokens.Issue(userID)
+	if err != nil {
+		panic(err) // chỉ lỗi khi secret rỗng
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+}
+
+// newTestMux tạo mux với store mẫu và testTokens.
+func newTestMux(t *testing.T) *http.ServeMux {
+	return newMux(newTestStores(t), testTokens)
+}
+
+// send gửi request tới h với access token của user #1.
 func send(h http.Handler, method, target, body string) *httptest.ResponseRecorder {
+	return sendAs(h, 1, method, target, body)
+}
+
+// sendAs gửi request tới h với access token của user userID, userID 0 là không gửi token.
+// Body khác rỗng thì gửi kèm Content-Type: application/json.
+func sendAs(h http.Handler, userID int, method, target, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if userID != 0 {
+		authorize(req, userID)
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -38,7 +71,7 @@ func send(h http.Handler, method, target, body string) *httptest.ResponseRecorde
 }
 
 func TestRoutes(t *testing.T) {
-	mux := newMux(newTestStores(t))
+	mux := newTestMux(t)
 
 	tests := []struct {
 		name      string
@@ -87,7 +120,7 @@ func TestRoutes(t *testing.T) {
 }
 
 func TestReadJSONErrors(t *testing.T) {
-	mux := newMux(newTestStores(t))
+	mux := newTestMux(t)
 
 	tests := []struct {
 		name     string
@@ -109,6 +142,7 @@ func TestReadJSONErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("POST", "/api/v1/tasks", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json; charset=utf-8")
+			authorize(req, 1)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
 
@@ -124,6 +158,7 @@ func TestReadJSONErrors(t *testing.T) {
 	t.Run("sai Content-Type", func(t *testing.T) {
 		req := httptest.NewRequest("POST", "/api/v1/tasks", strings.NewReader(`{}`))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		authorize(req, 1)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnsupportedMediaType {
@@ -133,7 +168,7 @@ func TestReadJSONErrors(t *testing.T) {
 }
 
 func TestValidation(t *testing.T) {
-	mux := newMux(newTestStores(t))
+	mux := newTestMux(t)
 	long := func(n int) string { return strings.Repeat("á", n) } // chuỗi n ký tự (2n byte)
 
 	tests := []struct {
@@ -158,12 +193,14 @@ func TestValidation(t *testing.T) {
 		{"PATCH id sai", "PATCH", "/api/v1/tasks/0", `{"title": "x"}`, 400,
 			`{"error":"tham số không hợp lệ","fields":{"id":"cần một số nguyên dương, nhận \"0\""}}`},
 		{"project rỗng", "POST", "/api/v1/projects", `{}`, 422,
-			`{"error":"dữ liệu không hợp lệ","fields":{"name":"không được để trống","owner_id":"phải lớn hơn 0"}}`},
-		{"tên project quá dài", "POST", "/api/v1/projects", `{"name": "` + long(101) + `", "owner_id": 1}`, 422,
-			`{"error":"dữ liệu không hợp lệ","fields":{"name":"tối đa 100 ký tự"}}`},
-		{"PUT project tên trống", "PUT", "/api/v1/projects/1", `{"name": " ", "owner_id": 1}`, 422,
 			`{"error":"dữ liệu không hợp lệ","fields":{"name":"không được để trống"}}`},
-		{"sai kiểu vẫn là 400", "POST", "/api/v1/projects", `{"name": 1, "owner_id": 1}`, 400,
+		{"tên project quá dài", "POST", "/api/v1/projects", `{"name": "` + long(101) + `"}`, 422,
+			`{"error":"dữ liệu không hợp lệ","fields":{"name":"tối đa 100 ký tự"}}`},
+		{"PUT project tên trống", "PUT", "/api/v1/projects/1", `{"name": " "}`, 422,
+			`{"error":"dữ liệu không hợp lệ","fields":{"name":"không được để trống"}}`},
+		{"owner_id lấy từ token, không nhận từ body", "POST", "/api/v1/projects", `{"name": "App", "owner_id": 2}`, 400,
+			`{"error":"không hỗ trợ field \"owner_id\""}`},
+		{"sai kiểu vẫn là 400", "POST", "/api/v1/projects", `{"name": 1}`, 400,
 			`{"error":"field \"name\" sai kiểu, cần string"}`},
 		{"status trên query sai", "GET", "/api/v1/projects/1/tasks?status=xong", "", 400,
 			`{"error":"tham số không hợp lệ","fields":{"status":"trạng thái \"xong\" không hợp lệ, chọn todo, doing hoặc done"}}`},
@@ -195,7 +232,7 @@ func TestValidation(t *testing.T) {
 	if rec := send(mux, "POST", "/api/v1/tasks", `{"project_id": 1, "title": "`+long(200)+`"}`); rec.Code != http.StatusCreated {
 		t.Errorf("title 200 ký tự: %d %s", rec.Code, rec.Body)
 	}
-	if rec := send(mux, "POST", "/api/v1/projects", `{"name": "`+long(100)+`", "owner_id": 1}`); rec.Code != http.StatusCreated {
+	if rec := send(mux, "POST", "/api/v1/projects", `{"name": "`+long(100)+`"}`); rec.Code != http.StatusCreated {
 		t.Errorf("tên project 100 ký tự: %d %s", rec.Code, rec.Body)
 	}
 }
@@ -222,7 +259,7 @@ func TestValidatorAddError(t *testing.T) {
 }
 
 func TestTaskCRUD(t *testing.T) {
-	mux := newMux(newTestStores(t))
+	mux := newTestMux(t)
 
 	// các bước chạy lần lượt trên cùng một store
 	rec := send(mux, "POST", "/api/v1/tasks", `{"project_id": 2, "title": " Viết README ", "due_date": "2026-11-30T17:00:00+07:00"}`)
@@ -273,19 +310,20 @@ func TestTaskCRUD(t *testing.T) {
 }
 
 func TestProjectCRUD(t *testing.T) {
-	mux := newMux(newTestStores(t))
+	mux := newTestMux(t)
 
-	rec := send(mux, "POST", "/api/v1/projects", `{"name": "App mobile", "owner_id": 2}`)
+	// user #2 tạo project thì là chủ project, PUT không đổi chủ
+	rec := sendAs(mux, 2, "POST", "/api/v1/projects", `{"name": "App mobile"}`)
 	if rec.Code != http.StatusCreated || rec.Header().Get("Location") != "/api/v1/projects/3" ||
 		rec.Body.String() != `{"id":3,"name":"App mobile","owner_id":2}`+"\n" {
 		t.Fatalf("POST: %d %q %s", rec.Code, rec.Header().Get("Location"), rec.Body)
 	}
 
-	rec = send(mux, "PUT", "/api/v1/projects/3", `{"name": "App mobile v2", "description": "iOS và Android", "owner_id": 2}`)
+	rec = send(mux, "PUT", "/api/v1/projects/3", `{"name": "App mobile v2", "description": "iOS và Android"}`)
 	if want := `{"id":3,"name":"App mobile v2","description":"iOS và Android","owner_id":2}` + "\n"; rec.Code != 200 || rec.Body.String() != want {
 		t.Errorf("PUT: %d %s", rec.Code, rec.Body)
 	}
-	if rec = send(mux, "PUT", "/api/v1/projects/9", `{"name": "x", "owner_id": 1}`); rec.Code != http.StatusNotFound {
+	if rec = send(mux, "PUT", "/api/v1/projects/9", `{"name": "x"}`); rec.Code != http.StatusNotFound {
 		t.Errorf("PUT project không có: %d", rec.Code)
 	}
 
@@ -298,7 +336,7 @@ func TestProjectCRUD(t *testing.T) {
 }
 
 func TestGetTaskPathValue(t *testing.T) {
-	_, tasks := newTestStores(t)
+	tasks := newTestStores(t).tasks
 
 	// gọi thẳng handler, không qua ServeMux nên phải tự đặt wildcard {id}
 	req := httptest.NewRequest(http.MethodGet, "/bat-ky", nil)
@@ -326,7 +364,7 @@ func listPage(t *testing.T, h http.Handler, target string) page[task.Task] {
 }
 
 func TestListTasksPages(t *testing.T) {
-	mux := newMux(newTestStores(t)) // 4 task, ID 1..4
+	mux := newTestMux(t) // 4 task, ID 1..4
 
 	// đi hết các trang 3 task: trang cuối không có next_cursor
 	var ids []int
@@ -357,7 +395,7 @@ func TestListTasksPages(t *testing.T) {
 }
 
 func TestTaskTags(t *testing.T) {
-	mux := newMux(newTestStores(t))
+	mux := newTestMux(t)
 
 	// tạo task kèm tag: tag được chuẩn hóa, bỏ trùng và sắp xếp
 	rec := send(mux, "POST", "/api/v1/tasks", `{"project_id": 1, "title": "Viết migration", "tags": ["Database", "go ", "database"]}`)
@@ -436,8 +474,9 @@ func (brokenTasks) List(context.Context, task.Filter) ([]task.Task, error) {
 
 func TestStoreError(t *testing.T) {
 	logs := captureLog(t)
-	projects, _ := newTestStores(t)
-	mux := newMux(projects, brokenTasks{})
+	s := newTestStores(t)
+	s.tasks = brokenTasks{}
+	mux := newMux(s, testTokens)
 
 	rec := send(mux, "GET", "/api/v1/tasks", "")
 	if rec.Code != http.StatusInternalServerError || rec.Body.String() != `{"error":"lỗi máy chủ"}`+"\n" {
@@ -462,8 +501,9 @@ func (vanishingProject) Update(_ context.Context, t *task.Task) error {
 }
 
 func TestTaskProjectDeleted(t *testing.T) {
-	projects, tasks := newTestStores(t)
-	mux := newMux(projects, vanishingProject{tasks})
+	s := newTestStores(t)
+	s.tasks = vanishingProject{s.tasks.(*task.MemoryStore)}
+	mux := newMux(s, testTokens)
 
 	// cùng response với khi project_id không tồn tại từ đầu: 422, không phải 500
 	want := `{"error":"dữ liệu không hợp lệ","fields":{"project_id":"không có project #1"}}` + "\n"

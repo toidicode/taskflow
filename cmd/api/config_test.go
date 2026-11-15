@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// testJWTSecret là secret đủ 32 byte cho các test cần cấu hình hợp lệ.
+const testJWTSecret = "secret-chi-dung-trong-test-0123456789"
+
 // envMap giả lập biến môi trường cho loadConfig.
 func envMap(m map[string]string) func(string) (string, bool) {
 	return func(key string) (string, bool) {
@@ -26,20 +29,26 @@ func TestLoadConfig(t *testing.T) {
 		env   map[string]string
 		check func(c Config) bool
 	}{
-		{"mặc định", nil, nil, func(c Config) bool { return c == defaultConfig() }},
+		{"mặc định", nil, map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret}, func(c Config) bool {
+			want := defaultConfig()
+			want.JWTSecret = testJWTSecret // secret không có giá trị mặc định
+			return c == want && c.JWTTTL == 15*time.Minute
+		}},
 		{"env đè mặc định", nil, map[string]string{
 			"TASKFLOW_ADDR": ":9000", "TASKFLOW_LOG_LEVEL": "debug", "TASKFLOW_LOG_FORMAT": "json",
 			"TASKFLOW_READ_TIMEOUT": "3s", "DATABASE_URL": "postgres://u:p@db/taskflow",
+			"TASKFLOW_JWT_SECRET": testJWTSecret, "TASKFLOW_JWT_TTL": "5m",
 		}, func(c Config) bool {
 			return c.Addr == ":9000" && c.LogLevel == slog.LevelDebug && c.LogFormat == "json" &&
-				c.ReadTimeout == 3*time.Second && c.DatabaseURL == "postgres://u:p@db/taskflow"
+				c.ReadTimeout == 3*time.Second && c.DatabaseURL == "postgres://u:p@db/taskflow" &&
+				c.JWTTTL == 5*time.Minute
 		}},
-		{"flag đè env", []string{"-addr", ":7000", "-log-level", "warn"},
-			map[string]string{"TASKFLOW_ADDR": ":9000", "TASKFLOW_LOG_LEVEL": "debug"},
-			func(c Config) bool { return c.Addr == ":7000" && c.LogLevel == slog.LevelWarn }},
-		{"env rỗng tắt CORS", nil, map[string]string{"TASKFLOW_CORS_ORIGIN": ""},
+		{"flag đè env", []string{"-addr", ":7000", "-log-level", "warn", "-jwt-ttl", "1h"},
+			map[string]string{"TASKFLOW_ADDR": ":9000", "TASKFLOW_LOG_LEVEL": "debug", "TASKFLOW_JWT_SECRET": testJWTSecret, "TASKFLOW_JWT_TTL": "5m"},
+			func(c Config) bool { return c.Addr == ":7000" && c.LogLevel == slog.LevelWarn && c.JWTTTL == time.Hour }},
+		{"env rỗng tắt CORS", nil, map[string]string{"TASKFLOW_CORS_ORIGIN": "", "TASKFLOW_JWT_SECRET": testJWTSecret},
 			func(c Config) bool { return c.CORSOrigin == "" }},
-		{"-migrate", []string{"-migrate"}, map[string]string{"DATABASE_URL": "postgres://u:p@db/taskflow"},
+		{"-migrate không cần secret", []string{"-migrate"}, map[string]string{"DATABASE_URL": "postgres://u:p@db/taskflow"},
 			func(c Config) bool { return c.Migrate }},
 	}
 	for _, tt := range tests {
@@ -64,8 +73,10 @@ func TestLoadConfigErrors(t *testing.T) {
 	}{
 		{"env sai kiểu", nil, map[string]string{"TASKFLOW_READ_TIMEOUT": "10", "TASKFLOW_LOG_LEVEL": "verbose"},
 			[]string{`TASKFLOW_READ_TIMEOUT="10"`, `TASKFLOW_LOG_LEVEL="verbose"`}},
-		{"giá trị sai", []string{"-addr", "8080", "-log-format", "xml", "-cors-origin", "http://localhost:5173/", "-idle-timeout", "0s"},
-			nil, []string{`addr "8080"`, `log-format "xml"`, `cors-origin "http://localhost:5173/"`, "idle-timeout 0s"}},
+		{"giá trị sai", []string{"-addr", "8080", "-log-format", "xml", "-cors-origin", "http://localhost:5173/", "-idle-timeout", "0s", "-jwt-ttl", "0s"},
+			nil, []string{`addr "8080"`, `log-format "xml"`, `cors-origin "http://localhost:5173/"`, "idle-timeout 0s", "jwt-ttl 0s"}},
+		{"thiếu secret", nil, nil, []string{"TASKFLOW_JWT_SECRET: cần ít nhất 32 byte"}},
+		{"secret quá ngắn", nil, map[string]string{"TASKFLOW_JWT_SECRET": "secret"}, []string{"TASKFLOW_JWT_SECRET: cần ít nhất 32 byte"}},
 		{"thừa tham số", []string{"serve"}, nil, []string{`không nhận tham số "serve"`}},
 		{"-migrate thiếu DATABASE_URL", []string{"-migrate"}, nil, []string{"migrate: cần đặt DATABASE_URL"}},
 	}
@@ -101,14 +112,15 @@ func TestLoadConfigErrors(t *testing.T) {
 func TestConfigLogValue(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.DatabaseURL = "postgres://taskflow:mat-khau-bi-mat@db:5432/taskflow"
+	cfg.JWTSecret = "jwt-secret-bi-mat-jwt-secret-bi-mat"
 
 	var buf bytes.Buffer
 	newLogger(&buf, Config{LogFormat: "json"}).Info("đã đọc cấu hình", "config", cfg)
 
-	if strings.Contains(buf.String(), "mat-khau-bi-mat") {
+	if strings.Contains(buf.String(), "bi-mat") {
 		t.Errorf("log lộ mật khẩu: %s", buf.String())
 	}
-	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`} {
+	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("log thiếu %s: %s", want, buf.String())
 		}

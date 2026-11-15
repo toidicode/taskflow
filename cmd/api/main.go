@@ -12,9 +12,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/postgres"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
+	"github.com/toidicode/taskflow/internal/user"
 )
 
 func main() {
@@ -41,13 +43,14 @@ func main() {
 		return
 	}
 
-	projects, tasks, err := openStores(context.Background(), cfg)
+	s, err := openStores(context.Background(), cfg)
 	if err != nil {
 		slog.Error("khởi tạo store", "err", err)
 		os.Exit(1)
 	}
 
-	srv := newServer(cfg, newAPI(projects, tasks, cfg.CORSOrigin))
+	tokens := auth.NewTokens([]byte(cfg.JWTSecret), cfg.JWTTTL)
+	srv := newServer(cfg, newAPI(s, tokens, cfg.CORSOrigin))
 	slog.Info("TaskFlow API lắng nghe", "addr", cfg.Addr)
 	if err := srv.ListenAndServe(); err != nil {
 		slog.Error("server dừng", "err", err)
@@ -80,15 +83,16 @@ func newServer(cfg Config, h http.Handler) *http.Server {
 
 // openStores dùng PostgreSQL khi có DATABASE_URL. Không có thì dùng store trong bộ nhớ
 // kèm dữ liệu mẫu, đủ để chạy thử mà chưa cần database.
-func openStores(ctx context.Context, cfg Config) (project.Store, task.Store, error) {
+func openStores(ctx context.Context, cfg Config) (stores, error) {
 	if cfg.DatabaseURL == "" {
 		slog.Warn("chưa đặt DATABASE_URL, dữ liệu chỉ nằm trong bộ nhớ")
 		projects, tasks := project.NewMemoryStore(), task.NewMemoryStore()
-		return projects, tasks, seed(ctx, projects, tasks)
+		s := stores{projects: projects, tasks: tasks, users: user.NewMemoryStore()}
+		return s, seed(ctx, projects, tasks)
 	}
 	db, err := postgres.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
-		return nil, nil, fmt.Errorf("kết nối PostgreSQL: %w", err)
+		return stores{}, fmt.Errorf("kết nối PostgreSQL: %w", err)
 	}
 	slog.Info("đã kết nối PostgreSQL")
 
@@ -96,18 +100,22 @@ func openStores(ctx context.Context, cfg Config) (project.Store, task.Store, err
 	m, err := postgres.NewMigrator(db)
 	if err != nil {
 		db.Close()
-		return nil, nil, err
+		return stores{}, err
 	}
 	pending, err := m.HasPending(ctx)
 	if err != nil {
 		db.Close()
-		return nil, nil, fmt.Errorf("kiểm tra migration: %w", err)
+		return stores{}, fmt.Errorf("kiểm tra migration: %w", err)
 	}
 	if pending {
 		db.Close()
-		return nil, nil, errors.New("database còn migration chưa chạy, hãy chạy với -migrate trước")
+		return stores{}, errors.New("database còn migration chưa chạy, hãy chạy với -migrate trước")
 	}
-	return postgres.NewProjectStore(db), postgres.NewTaskStore(db), nil
+	return stores{
+		projects: postgres.NewProjectStore(db),
+		tasks:    postgres.NewTaskStore(db),
+		users:    postgres.NewUserStore(db),
+	}, nil
 }
 
 // migrate chạy mọi migration chưa chạy trên database ở url và ghi log từng migration.

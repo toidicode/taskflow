@@ -12,10 +12,10 @@ import (
 )
 
 // projectInput là body của POST /projects và PUT /projects/{id}.
+// Không có owner_id: chủ project là user đang đăng nhập.
 type projectInput struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	OwnerID     int    `json:"owner_id"`
 }
 
 // validate kiểm tra body của project, cài interface validatable.
@@ -24,7 +24,6 @@ func (in *projectInput) validate(v validator) {
 	v.check(name != "", "name", "không được để trống")
 	v.check(utf8.RuneCountInString(name) <= 100, "name", "tối đa 100 ký tự")
 	v.check(utf8.RuneCountInString(in.Description) <= 2000, "description", "tối đa 2000 ký tự")
-	v.check(in.OwnerID > 0, "owner_id", "phải lớn hơn 0")
 }
 
 // listProjects liệt kê mọi project.
@@ -47,7 +46,7 @@ func createProject(store project.Store) http.HandlerFunc {
 		if !decodeValid(w, r, &in) {
 			return
 		}
-		p := project.New(in.Name, in.OwnerID)
+		p := project.New(in.Name, userIDFrom(r.Context())) // chủ project là người tạo
 		p.Description = in.Description
 		if err := store.Add(r.Context(), p); err != nil {
 			storeError(w, r, err)
@@ -75,7 +74,7 @@ func getProject(store project.Store) http.HandlerFunc {
 	}
 }
 
-// replaceProject thay toàn bộ nội dung project {id} bằng body JSON (PUT).
+// replaceProject thay tên và mô tả của project {id} bằng body JSON (PUT), giữ nguyên chủ project.
 func replaceProject(store project.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathID(w, r)
@@ -86,7 +85,12 @@ func replaceProject(store project.Store) http.HandlerFunc {
 		if !decodeValid(w, r, &in) {
 			return
 		}
-		p := project.New(in.Name, in.OwnerID)
+		old, err := store.Get(r.Context(), id)
+		if err != nil {
+			storeError(w, r, err)
+			return
+		}
+		p := project.New(in.Name, old.OwnerID)
 		p.ID, p.Description = id, in.Description
 		if err := store.Update(r.Context(), p); err != nil {
 			storeError(w, r, err)

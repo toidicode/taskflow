@@ -6,39 +6,55 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
+	"github.com/toidicode/taskflow/internal/user"
 )
 
-// newMux tạo ServeMux chứa các route của API.
-func newMux(projects project.Store, tasks task.Store) *http.ServeMux {
+// stores gom các store mà handler cần.
+type stores struct {
+	projects project.Store
+	tasks    task.Store
+	users    user.Store
+}
+
+// newMux tạo ServeMux chứa các route của API. Route dưới /api/v1 cần access token,
+// trừ đăng ký và đăng nhập.
+func newMux(s stores, tokens *auth.Tokens) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
+	mux.Handle("POST /api/v1/auth/register", register(s.users))
+	mux.Handle("POST /api/v1/auth/login", login(s.users, tokens))
 
-	// api đăng ký route dưới tiền tố /api/v1: api("GET", "/tasks", h) là "GET /api/v1/tasks".
+	// api đăng ký route cần đăng nhập dưới tiền tố /api/v1: api("GET", "/tasks", h) là "GET /api/v1/tasks".
+	// Mặc định là phải đăng nhập, route công khai phải đăng ký riêng ở trên.
+	authed := requireAuth(tokens)
 	api := func(method, path string, h http.Handler) {
-		mux.Handle(method+" /api/v1"+path, h)
+		mux.Handle(method+" /api/v1"+path, authed(h))
 	}
-	api("GET", "/projects", listProjects(projects))
-	api("POST", "/projects", createProject(projects))
-	api("GET", "/projects/{id}", getProject(projects))
-	api("PUT", "/projects/{id}", replaceProject(projects))
-	api("DELETE", "/projects/{id}", deleteProject(projects, tasks))
-	api("GET", "/projects/{id}/tasks", listProjectTasks(projects, tasks))
+	api("GET", "/me", me(s.users))
 
-	api("GET", "/tasks", listTasks(tasks))
-	api("POST", "/tasks", createTask(projects, tasks))
-	api("GET", "/tasks/{id}", getTask(tasks))
-	api("PATCH", "/tasks/{id}", updateTask(projects, tasks))
-	api("DELETE", "/tasks/{id}", deleteTask(tasks))
-	api("POST", "/tasks/{id}/tags", addTaskTag(tasks))
-	api("DELETE", "/tasks/{id}/tags/{name}", removeTaskTag(tasks))
+	api("GET", "/projects", listProjects(s.projects))
+	api("POST", "/projects", createProject(s.projects))
+	api("GET", "/projects/{id}", getProject(s.projects))
+	api("PUT", "/projects/{id}", replaceProject(s.projects))
+	api("DELETE", "/projects/{id}", deleteProject(s.projects, s.tasks))
+	api("GET", "/projects/{id}/tasks", listProjectTasks(s.projects, s.tasks))
+
+	api("GET", "/tasks", listTasks(s.tasks))
+	api("POST", "/tasks", createTask(s.projects, s.tasks))
+	api("GET", "/tasks/{id}", getTask(s.tasks))
+	api("PATCH", "/tasks/{id}", updateTask(s.projects, s.tasks))
+	api("DELETE", "/tasks/{id}", deleteTask(s.tasks))
+	api("POST", "/tasks/{id}/tags", addTaskTag(s.tasks))
+	api("DELETE", "/tasks/{id}/tags/{name}", removeTaskTag(s.tasks))
 	return mux
 }
 
 // newAPI bọc mux bằng các middleware dùng chung cho mọi route, theo thứ tự từ ngoài vào trong.
-func newAPI(projects project.Store, tasks task.Store, corsOrigin string) http.Handler {
-	return chain(newMux(projects, tasks),
+func newAPI(s stores, tokens *auth.Tokens, corsOrigin string) http.Handler {
+	return chain(newMux(s, tokens),
 		requestID,    // ngoài cùng: các middleware sau đều đọc được ID
 		logRequests,  // log cả response 500 do recoverPanic trả về
 		recoverPanic, // bắt panic của mọi thứ phía trong

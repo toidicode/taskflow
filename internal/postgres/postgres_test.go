@@ -6,12 +6,14 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/toidicode/taskflow/internal/postgres"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
+	"github.com/toidicode/taskflow/internal/user"
 )
 
 // openTestDB kết nối tới database trong TASKFLOW_TEST_DATABASE_URL, xóa sạch schema public
@@ -284,5 +286,38 @@ func TestProjectStore(t *testing.T) {
 	}
 	if err := s.Update(ctx, &project.Project{ID: 9, Name: "x", OwnerID: 1}); !errors.Is(err, project.ErrNotFound) {
 		t.Errorf("Update(#9) lỗi = %v, muốn ErrNotFound", err)
+	}
+}
+
+func TestUserStore(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	s := postgres.NewUserStore(db)
+
+	an := &user.User{Email: "an@example.com", Name: "An", PasswordHash: "$2a$12$hash-gia"}
+	if err := s.Add(ctx, an); err != nil || an.ID != 1 || an.CreatedAt.IsZero() {
+		t.Fatalf("Add() = %v, ID %d, CreatedAt %v", err, an.ID, an.CreatedAt)
+	}
+	if err := s.Add(ctx, &user.User{Email: "an@example.com", Name: "An 2"}); !errors.Is(err, user.ErrEmailTaken) {
+		t.Errorf("Add() email trùng: lỗi = %v, muốn ErrEmailTaken", err)
+	}
+	// CHECK của migration 00004: email phải là chữ thường, kể cả khi ghi không qua NormalizeEmail
+	err := s.Add(ctx, &user.User{Email: "Binh@Example.com", Name: "Bình"})
+	if err == nil || errors.Is(err, user.ErrEmailTaken) || !strings.Contains(err.Error(), "users_email_lowercase") {
+		t.Errorf("Add() email có chữ hoa: lỗi = %v, muốn vi phạm users_email_lowercase", err)
+	}
+
+	got, err := s.GetByEmail(ctx, "an@example.com")
+	if err != nil || got.ID != an.ID || got.PasswordHash != an.PasswordHash || !got.CreatedAt.Equal(an.CreatedAt) {
+		t.Errorf("GetByEmail() = %+v, %v", got, err)
+	}
+	if got, err := s.Get(ctx, an.ID); err != nil || got.Email != "an@example.com" || got.Name != "An" {
+		t.Errorf("Get(%d) = %+v, %v", an.ID, got, err)
+	}
+	if _, err := s.Get(ctx, 99); !errors.Is(err, user.ErrNotFound) {
+		t.Errorf("Get(99) lỗi = %v, muốn ErrNotFound", err)
+	}
+	if _, err := s.GetByEmail(ctx, "binh@example.com"); !errors.Is(err, user.ErrNotFound) {
+		t.Errorf("GetByEmail(binh) lỗi = %v, muốn ErrNotFound", err)
 	}
 }

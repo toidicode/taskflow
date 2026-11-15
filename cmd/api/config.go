@@ -21,8 +21,13 @@ type Config struct {
 	WriteTimeout time.Duration // ghi xong response
 	IdleTimeout  time.Duration // giữ kết nối keep-alive
 	DatabaseURL  string        // chuỗi kết nối PostgreSQL (chứa mật khẩu), rỗng là dùng store trong bộ nhớ
+	JWTSecret    string        // secret ký access token, ai có nó là ký được token của mọi user
+	JWTTTL       time.Duration // thời gian sống của access token
 	Migrate      bool          // chạy migration rồi thoát, không chạy server
 }
+
+// minJWTSecret là độ dài tối thiểu của JWTSecret: HS256 cần khóa ít nhất 256 bit.
+const minJWTSecret = 32
 
 // defaultConfig trả về cấu hình mặc định, đủ để chạy trên máy dev.
 func defaultConfig() Config {
@@ -34,6 +39,7 @@ func defaultConfig() Config {
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
+		JWTTTL:       15 * time.Minute,
 	}
 }
 
@@ -56,6 +62,8 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	env.duration("TASKFLOW_WRITE_TIMEOUT", &cfg.WriteTimeout)
 	env.duration("TASKFLOW_IDLE_TIMEOUT", &cfg.IdleTimeout)
 	env.str("DATABASE_URL", &cfg.DatabaseURL)
+	env.str("TASKFLOW_JWT_SECRET", &cfg.JWTSecret)
+	env.duration("TASKFLOW_JWT_TTL", &cfg.JWTTTL)
 	if err := errors.Join(env.errs...); err != nil {
 		return cfg, err
 	}
@@ -70,7 +78,8 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.DurationVar(&cfg.ReadTimeout, "read-timeout", cfg.ReadTimeout, "đọc request (TASKFLOW_READ_TIMEOUT)")
 	fs.DurationVar(&cfg.WriteTimeout, "write-timeout", cfg.WriteTimeout, "ghi response (TASKFLOW_WRITE_TIMEOUT)")
 	fs.DurationVar(&cfg.IdleTimeout, "idle-timeout", cfg.IdleTimeout, "keep-alive (TASKFLOW_IDLE_TIMEOUT)")
-	// DatabaseURL cố ý không có flag: tham số dòng lệnh lộ ra trong ps
+	fs.DurationVar(&cfg.JWTTTL, "jwt-ttl", cfg.JWTTTL, "thời gian sống của access token (TASKFLOW_JWT_TTL)")
+	// DatabaseURL, JWTSecret cố ý không có flag: tham số dòng lệnh lộ ra trong ps
 	// Migrate chỉ có flag: là một lệnh chạy một lần chứ không phải cấu hình lâu dài
 	fs.BoolVar(&cfg.Migrate, "migrate", false, "chạy migration database rồi thoát")
 	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
@@ -140,10 +149,13 @@ func (c Config) validate() error {
 	if c.Migrate && c.DatabaseURL == "" {
 		errs = append(errs, errors.New("migrate: cần đặt DATABASE_URL"))
 	}
+	if !c.Migrate && len(c.JWTSecret) < minJWTSecret { // -migrate không phát token nên không cần secret
+		errs = append(errs, fmt.Errorf("TASKFLOW_JWT_SECRET: cần ít nhất %d byte, VD tạo bằng openssl rand -base64 32", minJWTSecret))
+	}
 	timeouts := []struct {
 		name string
 		d    time.Duration
-	}{{"read-timeout", c.ReadTimeout}, {"write-timeout", c.WriteTimeout}, {"idle-timeout", c.IdleTimeout}}
+	}{{"read-timeout", c.ReadTimeout}, {"write-timeout", c.WriteTimeout}, {"idle-timeout", c.IdleTimeout}, {"jwt-ttl", c.JWTTTL}}
 	for _, t := range timeouts {
 		if t.d <= 0 {
 			errs = append(errs, fmt.Errorf("%s %v: phải lớn hơn 0", t.name, t.d))
@@ -153,11 +165,13 @@ func (c Config) validate() error {
 }
 
 // LogValue quyết định Config hiện ra thế nào trong log (Config cài slog.LogValuer).
-// DatabaseURL chứa mật khẩu nên chỉ cho biết đã đặt hay chưa.
+// DatabaseURL và JWTSecret là bí mật nên chỉ cho biết đã đặt hay chưa.
 func (c Config) LogValue() slog.Value {
-	db := ""
-	if c.DatabaseURL != "" {
-		db = "[đã ẩn]"
+	hidden := func(s string) string {
+		if s == "" {
+			return ""
+		}
+		return "[đã ẩn]"
 	}
 	return slog.GroupValue(
 		slog.String("addr", c.Addr),
@@ -167,6 +181,8 @@ func (c Config) LogValue() slog.Value {
 		slog.String("read_timeout", c.ReadTimeout.String()), // "10s" thay vì số nano giây
 		slog.String("write_timeout", c.WriteTimeout.String()),
 		slog.String("idle_timeout", c.IdleTimeout.String()),
-		slog.String("database_url", db),
+		slog.String("database_url", hidden(c.DatabaseURL)),
+		slog.String("jwt_secret", hidden(c.JWTSecret)),
+		slog.String("jwt_ttl", c.JWTTTL.String()),
 	)
 }
