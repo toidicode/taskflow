@@ -2,8 +2,10 @@ package main
 
 import (
 	"cmp"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 )
 
@@ -60,4 +62,38 @@ func (s *MemoryTaskStore) List() []*Task {
 		return cmp.Compare(a.ID, b.ID)
 	})
 	return tasks
+}
+
+// Save ghi mọi task ra file path dưới dạng JSON.
+func (s *MemoryTaskStore) Save(path string) error {
+	data, err := json.MarshalIndent(s.List(), "", "  ")
+	if err != nil {
+		return fmt.Errorf("mã hóa task: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("lưu task: %w", err)
+	}
+	return nil
+}
+
+// Load đọc task từ file path, thay cho các task đang có trong store.
+func (s *MemoryTaskStore) Load(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("đọc task: %w", err)
+	}
+	var tasks []*Task
+	if err := json.Unmarshal(data, &tasks); err != nil {
+		return fmt.Errorf("đọc task từ %s: %w", path, err)
+	}
+
+	s.tasks = make(map[int]*Task, len(tasks))
+	s.nextID = 1
+	for _, t := range tasks {
+		s.tasks[t.ID] = t
+		if t.ID >= s.nextID {
+			s.nextID = t.ID + 1
+		}
+	}
+	return nil
 }

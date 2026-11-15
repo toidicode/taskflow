@@ -4,8 +4,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 )
+
+// dataFile là file JSON lưu task giữa các lần chạy.
+const dataFile = "tasks.json"
 
 func main() {
 	fmt.Println("TaskFlow", version)
@@ -14,7 +18,7 @@ func main() {
 	p.Description = "Làm lại trang chủ và giỏ hàng"
 
 	store := NewMemoryTaskStore()
-	if err := seedTasks(store, p.ID); err != nil {
+	if err := loadOrSeed(store, p.ID); err != nil {
 		fmt.Println("Lỗi:", err)
 		os.Exit(1)
 	}
@@ -32,12 +36,27 @@ func main() {
 		}
 	}
 
-	// dữ liệu không hợp lệ: NewTask báo lỗi thay vì tạo task hỏng
-	if _, err := NewTask(0, "   "); err != nil {
-		fmt.Printf("Không tạo được task:\n%v\n", err)
-	}
-
 	printReport(store, p)
+
+	if err := store.Save(dataFile); err != nil {
+		fmt.Println("Lỗi:", err)
+		os.Exit(1)
+	}
+	fmt.Println("Đã lưu vào", dataFile)
+}
+
+// loadOrSeed đọc task từ dataFile, lần chạy đầu chưa có file thì tạo task mẫu.
+func loadOrSeed(store *MemoryTaskStore, projectID int) error {
+	err := store.Load(dataFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		fmt.Println("Chưa có", dataFile+", tạo task mẫu")
+		return seedTasks(store, projectID)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Đã đọc %d task từ %s\n", len(store.List()), dataFile)
+	return nil
 }
 
 // seedTasks thêm vài task mẫu của project projectID vào store.
