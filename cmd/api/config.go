@@ -23,6 +23,7 @@ type Config struct {
 	DatabaseURL  string        // chuỗi kết nối PostgreSQL (chứa mật khẩu), rỗng là dùng store trong bộ nhớ
 	JWTSecret    string        // secret ký access token, ai có nó là ký được token của mọi user
 	JWTTTL       time.Duration // thời gian sống của access token
+	UploadDir    string        // thư mục lưu file upload
 	Migrate      bool          // chạy migration rồi thoát, không chạy server
 }
 
@@ -40,6 +41,7 @@ func defaultConfig() Config {
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
 		JWTTTL:       15 * time.Minute,
+		UploadDir:    "uploads",
 	}
 }
 
@@ -64,6 +66,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	env.str("DATABASE_URL", &cfg.DatabaseURL)
 	env.str("TASKFLOW_JWT_SECRET", &cfg.JWTSecret)
 	env.duration("TASKFLOW_JWT_TTL", &cfg.JWTTTL)
+	env.str("TASKFLOW_UPLOAD_DIR", &cfg.UploadDir)
 	if err := errors.Join(env.errs...); err != nil {
 		return cfg, err
 	}
@@ -79,6 +82,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.DurationVar(&cfg.WriteTimeout, "write-timeout", cfg.WriteTimeout, "ghi response (TASKFLOW_WRITE_TIMEOUT)")
 	fs.DurationVar(&cfg.IdleTimeout, "idle-timeout", cfg.IdleTimeout, "keep-alive (TASKFLOW_IDLE_TIMEOUT)")
 	fs.DurationVar(&cfg.JWTTTL, "jwt-ttl", cfg.JWTTTL, "thời gian sống của access token (TASKFLOW_JWT_TTL)")
+	fs.StringVar(&cfg.UploadDir, "upload-dir", cfg.UploadDir, "thư mục lưu file upload (TASKFLOW_UPLOAD_DIR)")
 	// DatabaseURL, JWTSecret cố ý không có flag: tham số dòng lệnh lộ ra trong ps
 	// Migrate chỉ có flag: là một lệnh chạy một lần chứ không phải cấu hình lâu dài
 	fs.BoolVar(&cfg.Migrate, "migrate", false, "chạy migration database rồi thoát")
@@ -152,6 +156,9 @@ func (c Config) validate() error {
 	if !c.Migrate && len(c.JWTSecret) < minJWTSecret { // -migrate không phát token nên không cần secret
 		errs = append(errs, fmt.Errorf("TASKFLOW_JWT_SECRET: cần ít nhất %d byte, VD tạo bằng openssl rand -base64 32", minJWTSecret))
 	}
+	if c.UploadDir == "" {
+		errs = append(errs, errors.New("upload-dir: không được để trống"))
+	}
 	timeouts := []struct {
 		name string
 		d    time.Duration
@@ -184,5 +191,6 @@ func (c Config) LogValue() slog.Value {
 		slog.String("database_url", hidden(c.DatabaseURL)),
 		slog.String("jwt_secret", hidden(c.JWTSecret)),
 		slog.String("jwt_ttl", c.JWTTTL.String()),
+		slog.String("upload_dir", c.UploadDir),
 	)
 }

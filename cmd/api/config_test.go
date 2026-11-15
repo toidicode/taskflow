@@ -37,11 +37,11 @@ func TestLoadConfig(t *testing.T) {
 		{"env đè mặc định", nil, map[string]string{
 			"TASKFLOW_ADDR": ":9000", "TASKFLOW_LOG_LEVEL": "debug", "TASKFLOW_LOG_FORMAT": "json",
 			"TASKFLOW_READ_TIMEOUT": "3s", "DATABASE_URL": "postgres://u:p@db/taskflow",
-			"TASKFLOW_JWT_SECRET": testJWTSecret, "TASKFLOW_JWT_TTL": "5m",
+			"TASKFLOW_JWT_SECRET": testJWTSecret, "TASKFLOW_JWT_TTL": "5m", "TASKFLOW_UPLOAD_DIR": "/var/lib/taskflow",
 		}, func(c Config) bool {
 			return c.Addr == ":9000" && c.LogLevel == slog.LevelDebug && c.LogFormat == "json" &&
 				c.ReadTimeout == 3*time.Second && c.DatabaseURL == "postgres://u:p@db/taskflow" &&
-				c.JWTTTL == 5*time.Minute
+				c.JWTTTL == 5*time.Minute && c.UploadDir == "/var/lib/taskflow"
 		}},
 		{"flag đè env", []string{"-addr", ":7000", "-log-level", "warn", "-jwt-ttl", "1h"},
 			map[string]string{"TASKFLOW_ADDR": ":9000", "TASKFLOW_LOG_LEVEL": "debug", "TASKFLOW_JWT_SECRET": testJWTSecret, "TASKFLOW_JWT_TTL": "5m"},
@@ -77,6 +77,8 @@ func TestLoadConfigErrors(t *testing.T) {
 			nil, []string{`addr "8080"`, `log-format "xml"`, `cors-origin "http://localhost:5173/"`, "idle-timeout 0s", "jwt-ttl 0s"}},
 		{"thiếu secret", nil, nil, []string{"TASKFLOW_JWT_SECRET: cần ít nhất 32 byte"}},
 		{"secret quá ngắn", nil, map[string]string{"TASKFLOW_JWT_SECRET": "secret"}, []string{"TASKFLOW_JWT_SECRET: cần ít nhất 32 byte"}},
+		{"upload-dir rỗng", []string{"-upload-dir", ""}, map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
+			[]string{"upload-dir: không được để trống"}},
 		{"thừa tham số", []string{"serve"}, nil, []string{`không nhận tham số "serve"`}},
 		{"-migrate thiếu DATABASE_URL", []string{"-migrate"}, nil, []string{"migrate: cần đặt DATABASE_URL"}},
 	}
@@ -120,7 +122,7 @@ func TestConfigLogValue(t *testing.T) {
 	if strings.Contains(buf.String(), "bi-mat") {
 		t.Errorf("log lộ mật khẩu: %s", buf.String())
 	}
-	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`} {
+	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("log thiếu %s: %s", want, buf.String())
 		}

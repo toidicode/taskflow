@@ -254,7 +254,7 @@ func updateTask(s stores) http.HandlerFunc {
 	}
 }
 
-// deleteTask xóa task {id}, thành công thì trả 204 không có body. Chỉ chủ project được xóa.
+// deleteTask xóa task {id} cùng các file đính kèm, thành công thì trả 204 không có body. Chỉ chủ project được xóa.
 func deleteTask(s stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathID(w, r)
@@ -269,10 +269,17 @@ func deleteTask(s stores) http.HandlerFunc {
 			forbidden(w, "chỉ chủ project được xóa task")
 			return
 		}
+		// đọc danh sách file trước: xóa task thì ON DELETE CASCADE xóa luôn các hàng này
+		files, err := s.attachments.List(r.Context(), id)
+		if err != nil {
+			storeError(w, r, err)
+			return
+		}
 		if err := s.tasks.Delete(r.Context(), id); err != nil {
 			storeError(w, r, err)
 			return
 		}
+		removeFiles(r, s.files, files...)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

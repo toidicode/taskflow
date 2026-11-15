@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
 	"github.com/toidicode/taskflow/internal/user"
@@ -26,7 +29,7 @@ func addUsers(t *testing.T, s stores, names ...string) {
 
 // newAccessMux tạo mux cho test phân quyền:
 //   - user #1 An: chủ project #1, #2 (task #1..#4 của dữ liệu mẫu);
-//   - user #2 Bình: được giao task #3 (project #1, có tag "go");
+//   - user #2 Bình: được giao task #3 (project #1, có tag "go"; file #1 của An, file #2 của Bình);
 //   - user #3 Chi: chủ project #3 với task #5.
 func newAccessMux(t *testing.T) http.Handler {
 	t.Helper()
@@ -48,6 +51,17 @@ func newAccessMux(t *testing.T) http.Handler {
 	}
 	if err := s.tasks.Add(ctx, &task.Task{ProjectID: p.ID, Title: "Task của Chi"}); err != nil {
 		t.Fatal(err)
+	}
+	// task #3 có file #1 do An upload và file #2 do Bình upload
+	for _, uploader := range []int{1, 2} {
+		a := &attachment.Attachment{TaskID: 3, Name: "ghi-chu.txt", StoredName: rand.Text(),
+			ContentType: "text/plain; charset=utf-8", Size: 7, UploadedBy: uploader}
+		if _, err := s.files.Save(ctx, a.StoredName, strings.NewReader("ghi chú")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.attachments.Add(ctx, a); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return newMux(s, testTokens)
 }
@@ -81,6 +95,11 @@ func TestAccess(t *testing.T) {
 		{"gắn tag", "POST", "/api/v1/tasks/3/tags", `{"name": "test"}`, [3]int{200, 403, 404}},
 		{"gỡ tag", "DELETE", "/api/v1/tasks/3/tags/go", "", [3]int{204, 403, 404}},
 		{"xóa task", "DELETE", "/api/v1/tasks/3", "", [3]int{204, 403, 404}},
+		{"upload file", "POST", "/api/v1/tasks/3/attachments", uploadBody("file", "a.txt", "xin chào"), [3]int{201, 201, 404}},
+		{"xem danh sách file", "GET", "/api/v1/tasks/3/attachments", "", [3]int{200, 200, 404}},
+		{"tải file", "GET", "/api/v1/attachments/1", "", [3]int{200, 200, 404}},
+		{"xóa file của An", "DELETE", "/api/v1/attachments/1", "", [3]int{204, 403, 404}},
+		{"xóa file của Bình", "DELETE", "/api/v1/attachments/2", "", [3]int{204, 204, 404}},
 	}
 	for _, tt := range tests {
 		for i, role := range roles {
@@ -100,6 +119,8 @@ func TestAccessHidesExistence(t *testing.T) {
 	for _, tt := range []struct{ target, want string }{
 		{"/api/v1/tasks/3", `{"error":"task #3: không tìm thấy"}`},
 		{"/api/v1/projects/1", `{"error":"project #1: không tìm thấy"}`},
+		{"/api/v1/attachments/1", `{"error":"attachment #1: không tìm thấy"}`}, // không lộ cả ID của task
+		{"/api/v1/attachments/99", `{"error":"attachment #99: không tìm thấy"}`},
 	} {
 		if rec := sendAs(mux, 3, "GET", tt.target, ""); rec.Body.String() != tt.want+"\n" {
 			t.Errorf("GET %s: %d %s, muốn %s", tt.target, rec.Code, rec.Body, tt.want)

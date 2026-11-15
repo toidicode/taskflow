@@ -6,17 +6,21 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/project"
+	"github.com/toidicode/taskflow/internal/storage"
 	"github.com/toidicode/taskflow/internal/task"
 	"github.com/toidicode/taskflow/internal/user"
 )
 
 // stores gom các store mà handler cần.
 type stores struct {
-	projects project.Store
-	tasks    task.Store
-	users    user.Store
+	projects    project.Store
+	tasks       task.Store
+	users       user.Store
+	attachments attachment.Store // thông tin file đính kèm
+	files       storage.Storage  // nội dung file đính kèm
 }
 
 // newMux tạo ServeMux chứa các route của API. Route dưới /api/v1 cần access token,
@@ -49,6 +53,11 @@ func newMux(s stores, tokens *auth.Tokens) *http.ServeMux {
 	api("DELETE", "/tasks/{id}", deleteTask(s))
 	api("POST", "/tasks/{id}/tags", addTaskTag(s))
 	api("DELETE", "/tasks/{id}/tags/{name}", removeTaskTag(s))
+
+	api("POST", "/tasks/{id}/attachments", uploadAttachment(s))
+	api("GET", "/tasks/{id}/attachments", listAttachments(s))
+	api("GET", "/attachments/{id}", downloadAttachment(s))
+	api("DELETE", "/attachments/{id}", deleteAttachment(s))
 	return mux
 }
 
@@ -84,7 +93,7 @@ func pathID(w http.ResponseWriter, r *http.Request) (int, bool) {
 // (VD mất kết nối database) được ghi log kèm request ID rồi trả 500, client không thấy chi tiết lỗi.
 func storeError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, task.ErrNotFound) || errors.Is(err, project.ErrNotFound):
+	case errors.Is(err, task.ErrNotFound) || errors.Is(err, project.ErrNotFound) || errors.Is(err, attachment.ErrNotFound):
 		errorJSON(w, http.StatusNotFound, err.Error())
 		return
 	case errors.Is(err, project.ErrHasTasks):

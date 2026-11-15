@@ -12,9 +12,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/postgres"
 	"github.com/toidicode/taskflow/internal/project"
+	"github.com/toidicode/taskflow/internal/storage"
 	"github.com/toidicode/taskflow/internal/task"
 	"github.com/toidicode/taskflow/internal/user"
 )
@@ -84,11 +86,16 @@ func newServer(cfg Config, h http.Handler) *http.Server {
 // openStores dùng PostgreSQL khi có DATABASE_URL. Không có thì dùng store trong bộ nhớ
 // kèm dữ liệu mẫu, đủ để chạy thử mà chưa cần database.
 func openStores(ctx context.Context, cfg Config) (stores, error) {
+	files, err := storage.NewDisk(cfg.UploadDir) // nội dung file luôn nằm trên đĩa, kể cả khi không có database
+	if err != nil {
+		return stores{}, fmt.Errorf("thư mục upload: %w", err)
+	}
 	if cfg.DatabaseURL == "" {
 		slog.Warn("chưa đặt DATABASE_URL, dữ liệu chỉ nằm trong bộ nhớ")
 		projects, tasks := project.NewMemoryStore(), task.NewMemoryStore()
 		tasks.SetProjectFunc(projectLookup(projects)) // để lọc task theo quyền (Filter.VisibleTo)
-		s := stores{projects: projects, tasks: tasks, users: user.NewMemoryStore()}
+		s := stores{projects: projects, tasks: tasks, users: user.NewMemoryStore(),
+			attachments: attachment.NewMemoryStore(), files: files}
 		return s, seed(ctx, projects, tasks)
 	}
 	db, err := postgres.Open(ctx, cfg.DatabaseURL)
@@ -113,9 +120,11 @@ func openStores(ctx context.Context, cfg Config) (stores, error) {
 		return stores{}, errors.New("database còn migration chưa chạy, hãy chạy với -migrate trước")
 	}
 	return stores{
-		projects: postgres.NewProjectStore(db),
-		tasks:    postgres.NewTaskStore(db),
-		users:    postgres.NewUserStore(db),
+		projects:    postgres.NewProjectStore(db),
+		tasks:       postgres.NewTaskStore(db),
+		users:       postgres.NewUserStore(db),
+		attachments: postgres.NewAttachmentStore(db),
+		files:       files,
 	}, nil
 }
 

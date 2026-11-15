@@ -13,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/project"
+	"github.com/toidicode/taskflow/internal/storage"
 	"github.com/toidicode/taskflow/internal/task"
 	"github.com/toidicode/taskflow/internal/user"
 )
@@ -31,7 +33,12 @@ func newTestStores(t *testing.T) stores {
 	if err := users.Add(context.Background(), &user.User{Email: "an@example.com", Name: "An"}); err != nil {
 		t.Fatal(err)
 	}
-	return stores{projects: projects, tasks: tasks, users: users}
+	files, err := storage.NewDisk(t.TempDir()) // thư mục tạm, go test tự xóa khi test xong
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { files.Close() })
+	return stores{projects: projects, tasks: tasks, users: users, attachments: attachment.NewMemoryStore(), files: files}
 }
 
 // testTokens phát và kiểm tra token trong test, secret này chỉ dùng cho test.
@@ -57,10 +64,14 @@ func send(h http.Handler, method, target, body string) *httptest.ResponseRecorde
 }
 
 // sendAs gửi request tới h với access token của user userID, userID 0 là không gửi token.
-// Body khác rỗng thì gửi kèm Content-Type: application/json.
+// Body khác rỗng thì gửi kèm Content-Type: application/json, body tạo bằng uploadBody thì
+// gửi kèm Content-Type: multipart/form-data.
 func sendAs(h http.Handler, userID int, method, target, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
-	if body != "" {
+	switch {
+	case strings.HasPrefix(body, "--"+testBoundary):
+		req.Header.Set("Content-Type", "multipart/form-data; boundary="+testBoundary)
+	case body != "":
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if userID != 0 {

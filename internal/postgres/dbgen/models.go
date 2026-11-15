@@ -9,6 +9,17 @@ import (
 	"time"
 )
 
+type Attachment struct {
+	ID          int64
+	TaskID      int64
+	Name        string
+	StoredName  string
+	ContentType string
+	Size        int64
+	UploadedBy  sql.NullInt64
+	CreatedAt   time.Time
+}
+
 type Project struct {
 	ID          int64
 	Name        string
