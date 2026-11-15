@@ -16,6 +16,11 @@ type Project struct {
 	OwnerID     int64
 }
 
+type Tag struct {
+	ID   int64
+	Name string
+}
+
 type Task struct {
 	ID          int64
 	ProjectID   int64
@@ -25,6 +30,11 @@ type Task struct {
 	AssigneeID  sql.NullInt64
 	DueDate     sql.NullTime
 	CompletedAt sql.NullTime
+}
+
+type TaskTag struct {
+	TaskID int64
+	TagID  int64
 }
 
 type User struct {

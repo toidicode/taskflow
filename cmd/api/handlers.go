@@ -31,6 +31,8 @@ func newMux(projects project.Store, tasks task.Store) *http.ServeMux {
 	api("GET", "/tasks/{id}", getTask(tasks))
 	api("PATCH", "/tasks/{id}", updateTask(projects, tasks))
 	api("DELETE", "/tasks/{id}", deleteTask(tasks))
+	api("POST", "/tasks/{id}/tags", addTaskTag(tasks))
+	api("DELETE", "/tasks/{id}/tags/{name}", removeTaskTag(tasks))
 	return mux
 }
 
@@ -62,11 +64,15 @@ func pathID(w http.ResponseWriter, r *http.Request) (int, bool) {
 	return id, true
 }
 
-// storeError trả 404 khi err là lỗi không tìm thấy. Lỗi khác (VD mất kết nối database)
-// được ghi log kèm request ID rồi trả 500, client không thấy chi tiết lỗi.
+// storeError trả 404 khi err là lỗi không tìm thấy, 409 khi xóa project còn task. Lỗi khác
+// (VD mất kết nối database) được ghi log kèm request ID rồi trả 500, client không thấy chi tiết lỗi.
 func storeError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, task.ErrNotFound) || errors.Is(err, project.ErrNotFound) {
+	switch {
+	case errors.Is(err, task.ErrNotFound) || errors.Is(err, project.ErrNotFound):
 		errorJSON(w, http.StatusNotFound, err.Error())
+		return
+	case errors.Is(err, project.ErrHasTasks):
+		errorJSON(w, http.StatusConflict, err.Error())
 		return
 	}
 	requestLogger(r).Error("store", "err", err)

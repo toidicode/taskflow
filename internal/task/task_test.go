@@ -3,6 +3,8 @@ package task_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +87,25 @@ func TestValidate(t *testing.T) {
 		if _, ok := e.(*task.ValidationError); !ok {
 			t.Errorf("lỗi %v có kiểu %T, muốn *task.ValidationError", e, e)
 		}
+	}
+}
+
+func TestTags(t *testing.T) {
+	got := task.NormalizeTags([]string{" Go", "backend", "go", "BACKEND "})
+	if !slices.Equal(got, []string{"backend", "go"}) {
+		t.Errorf("NormalizeTags = %v, muốn [backend go]", got)
+	}
+
+	tk := task.Task{ProjectID: 1, Title: "Viết API", Tags: []string{"go", strings.Repeat("a", task.MaxTagLen+1)}}
+	if err := tk.Validate(); err == nil || err.Error() != "tags: tên tag tối đa 30 ký tự" {
+		t.Errorf("Validate() tag quá dài = %v", err)
+	}
+	tk.Tags = make([]string, task.MaxTags+1)
+	for i := range tk.Tags {
+		tk.Tags[i] = fmt.Sprintf("tag%d", i)
+	}
+	if err := tk.Validate(); err == nil || err.Error() != "tags: tối đa 10 tag" {
+		t.Errorf("Validate() quá nhiều tag = %v", err)
 	}
 }
 

@@ -91,6 +91,9 @@ func (s *ProjectStore) Delete(ctx context.Context, id int) error {
 	defer cancel()
 
 	n, err := s.q.DeleteProject(ctx, int64(id))
+	if isForeignKeyViolation(err) { // khóa ngoại tasks.project_id không cho xóa project còn task
+		return fmt.Errorf("project #%d: %w", id, project.ErrHasTasks)
+	}
 	if err != nil {
 		return fmt.Errorf("xóa project #%d: %w", id, err)
 	}

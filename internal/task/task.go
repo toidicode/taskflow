@@ -4,6 +4,7 @@ package task
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +72,7 @@ type Task struct {
 	AssigneeID  int       `json:"assignee_id,omitempty"` // 0 nghĩa là chưa giao cho ai
 	DueDate     time.Time `json:"due_date,omitzero"`     // zero value nghĩa là không có hạn
 	CompletedAt time.Time `json:"completed_at,omitzero"` // zero value nghĩa là chưa xong
+	Tags        []string  `json:"tags,omitempty"`        // tên tag, đã chuẩn hóa bằng NormalizeTags
 }
 
 // ValidationError cho biết một field có giá trị không hợp lệ.
@@ -83,11 +85,39 @@ func (e *ValidationError) Error() string {
 	return e.Field + ": " + e.Message
 }
 
-// Giới hạn độ dài (tính theo ký tự) của title và description.
+// Giới hạn độ dài (tính theo ký tự) của title, description, tên tag và số tag của một task.
 const (
 	MaxTitleLen       = 200
 	MaxDescriptionLen = 2000
+	MaxTagLen         = 30
+	MaxTags           = 10
 )
+
+// NormalizeTag bỏ khoảng trắng hai đầu và đổi tên tag sang chữ thường: "Backend " và "backend" là một tag.
+func NormalizeTag(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// NormalizeTags chuẩn hóa từng tên tag, bỏ tên trùng và sắp xếp theo thứ tự chữ cái.
+func NormalizeTags(names []string) []string {
+	tags := make([]string, 0, len(names))
+	for _, name := range names {
+		tags = append(tags, NormalizeTag(name))
+	}
+	slices.Sort(tags)
+	return slices.Compact(tags)
+}
+
+// CheckTag trả về thông báo lỗi khi tên tag (đã chuẩn hóa) không hợp lệ, chuỗi rỗng nếu hợp lệ.
+func CheckTag(name string) string {
+	switch {
+	case name == "":
+		return "tên tag không được để trống"
+	case utf8.RuneCountInString(name) > MaxTagLen:
+		return fmt.Sprintf("tên tag tối đa %d ký tự", MaxTagLen)
+	}
+	return ""
+}
 
 // New tạo một task mới ở trạng thái todo, ID do Store cấp khi thêm task.
 // Dữ liệu không hợp lệ thì trả về lỗi của Validate.
@@ -119,6 +149,11 @@ func (t *Task) Validate() error {
 	check(utf8.RuneCountInString(t.Description) <= MaxDescriptionLen, "description",
 		fmt.Sprintf("tối đa %d ký tự", MaxDescriptionLen))
 	check(t.AssigneeID >= 0, "assignee_id", "không được âm")
+	check(len(t.Tags) <= MaxTags, "tags", fmt.Sprintf("tối đa %d tag", MaxTags))
+	for _, tag := range t.Tags {
+		msg := CheckTag(tag)
+		check(msg == "", "tags", msg)
+	}
 	return errors.Join(errs...)
 }
 
@@ -148,6 +183,11 @@ func (t *Task) SetStatus(s Status) {
 		t.Status = s
 		t.CompletedAt = time.Time{}
 	}
+}
+
+// HasTag cho biết task có tag name (đã chuẩn hóa) hay không.
+func (t *Task) HasTag(name string) bool {
+	return slices.Contains(t.Tags, name)
 }
 
 // IsDone cho biết task đã xong hay chưa.

@@ -8,11 +8,17 @@ SELECT * FROM tasks
 WHERE id = $1;
 
 -- name: ListTasks :many
--- Tham số NULL thì bỏ qua điều kiện lọc tương ứng.
+-- Tham số NULL thì bỏ qua điều kiện lọc tương ứng, max_rows NULL là không giới hạn.
+-- Phân trang theo cursor: chỉ lấy task có id lớn hơn after_id (id cuối của trang trước).
 SELECT * FROM tasks
 WHERE (sqlc.narg(project_id)::bigint IS NULL OR project_id = sqlc.narg(project_id))
   AND (sqlc.narg(status)::text IS NULL OR status = sqlc.narg(status))
-ORDER BY id;
+  AND (sqlc.narg(tag)::text IS NULL OR EXISTS (
+        SELECT 1 FROM task_tags tt JOIN tags tg ON tg.id = tt.tag_id
+        WHERE tt.task_id = tasks.id AND tg.name = sqlc.narg(tag)))
+  AND tasks.id > @after_id
+ORDER BY tasks.id
+LIMIT sqlc.narg(max_rows);
 
 -- name: UpdateTask :execrows
 UPDATE tasks

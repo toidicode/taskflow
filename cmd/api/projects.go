@@ -96,7 +96,7 @@ func replaceProject(store project.Store) http.HandlerFunc {
 	}
 }
 
-// deleteProject xóa project {id} khi project không còn task nào, trả 204.
+// deleteProject xóa project {id} khi project không còn task nào, trả 204; còn task thì 409.
 func deleteProject(projects project.Store, tasks task.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathID(w, r)
@@ -107,15 +107,16 @@ func deleteProject(projects project.Store, tasks task.Store) http.HandlerFunc {
 			storeError(w, r, err)
 			return
 		}
-		ts, err := tasks.List(r.Context(), task.Filter{ProjectID: id})
+		ts, err := tasks.List(r.Context(), task.Filter{ProjectID: id, Limit: 1}) // chỉ cần biết còn task không
 		if err != nil {
 			storeError(w, r, err)
 			return
 		}
 		if len(ts) > 0 {
-			errorJSON(w, http.StatusConflict, fmt.Sprintf("project #%d vẫn còn task, hãy xóa task trước", id))
+			storeError(w, r, fmt.Errorf("project #%d: %w", id, project.ErrHasTasks))
 			return
 		}
+		// task được thêm ngay sau lúc kiểm tra thì khóa ngoại của PostgreSQL vẫn chặn: store trả ErrHasTasks
 		if err := projects.Delete(r.Context(), id); err != nil {
 			storeError(w, r, err)
 			return

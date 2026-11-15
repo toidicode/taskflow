@@ -79,17 +79,32 @@ const listTasks = `-- name: ListTasks :many
 SELECT id, project_id, title, description, status, assignee_id, due_date, completed_at FROM tasks
 WHERE ($1::bigint IS NULL OR project_id = $1)
   AND ($2::text IS NULL OR status = $2)
-ORDER BY id
+  AND ($3::text IS NULL OR EXISTS (
+        SELECT 1 FROM task_tags tt JOIN tags tg ON tg.id = tt.tag_id
+        WHERE tt.task_id = tasks.id AND tg.name = $3))
+  AND tasks.id > $4
+ORDER BY tasks.id
+LIMIT $5
 `
 
 type ListTasksParams struct {
 	ProjectID sql.NullInt64
 	Status    sql.NullString
+	Tag       sql.NullString
+	AfterID   int64
+	MaxRows   sql.NullInt32
 }
 
-// Tham số NULL thì bỏ qua điều kiện lọc tương ứng.
+// Tham số NULL thì bỏ qua điều kiện lọc tương ứng, max_rows NULL là không giới hạn.
+// Phân trang theo cursor: chỉ lấy task có id lớn hơn after_id (id cuối của trang trước).
 func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, error) {
-	rows, err := q.db.QueryContext(ctx, listTasks, arg.ProjectID, arg.Status)
+	rows, err := q.db.QueryContext(ctx, listTasks,
+		arg.ProjectID,
+		arg.Status,
+		arg.Tag,
+		arg.AfterID,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return nil, err
 	}

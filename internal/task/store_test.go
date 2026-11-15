@@ -86,6 +86,49 @@ func TestMemoryStore_Copies(t *testing.T) {
 	if again, _ := s.Get(ctx, 1); again.Title != "Viết API" || again.Status != task.StatusTodo {
 		t.Errorf("task trong store bị đổi: %q %v", again.Title, again.Status)
 	}
+
+	// slice Tags cũng phải là bản sao: sửa phần tử của slice bên ngoài không đổi store
+	tagged := &task.Task{ProjectID: 1, Title: "Có tag", Tags: []string{"go"}}
+	_ = s.Add(ctx, tagged)
+	tagged.Tags[0] = "sửa sau khi Add"
+	got, _ = s.Get(ctx, tagged.ID)
+	got.Tags[0] = "sửa bản Get"
+	if again, _ := s.Get(ctx, tagged.ID); !slices.Equal(again.Tags, []string{"go"}) {
+		t.Errorf("tag trong store bị đổi: %v", again.Tags)
+	}
+}
+
+func TestMemoryStore_Tags(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t, "Thiết kế database", "Viết API")
+
+	if err := s.AddTag(ctx, 2, "go"); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.AddTag(ctx, 2, "backend")
+	_ = s.AddTag(ctx, 2, "go") // đã có: không thêm lần nữa
+	if got, _ := s.Get(ctx, 2); !slices.Equal(got.Tags, []string{"backend", "go"}) {
+		t.Errorf("Tags = %v, muốn [backend go]", got.Tags)
+	}
+	if list, _ := s.List(ctx, task.Filter{Tag: "go"}); len(list) != 1 || list[0].ID != 2 {
+		t.Errorf("List(tag go) = %+v", list)
+	}
+
+	if err := s.RemoveTag(ctx, 2, "go"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveTag(ctx, 2, "go"); err != nil { // task không còn tag này: không lỗi
+		t.Errorf("RemoveTag lần hai lỗi: %v", err)
+	}
+	if got, _ := s.Get(ctx, 2); !slices.Equal(got.Tags, []string{"backend"}) {
+		t.Errorf("Tags sau RemoveTag = %v", got.Tags)
+	}
+	if err := s.AddTag(ctx, 9, "go"); !errors.Is(err, task.ErrNotFound) {
+		t.Errorf("AddTag(#9) lỗi = %v, muốn wrap ErrNotFound", err)
+	}
+	if err := s.RemoveTag(ctx, 9, "go"); !errors.Is(err, task.ErrNotFound) {
+		t.Errorf("RemoveTag(#9) lỗi = %v, muốn wrap ErrNotFound", err)
+	}
 }
 
 func TestMemoryStore_UpdateDelete(t *testing.T) {
@@ -134,6 +177,8 @@ func TestMemoryStore_List(t *testing.T) {
 		{"theo project", task.Filter{ProjectID: 2}, []int{5}},
 		{"theo trạng thái", task.Filter{Status: &done}, []int{2}},
 		{"cả hai", task.Filter{ProjectID: 2, Status: &done}, []int{}},
+		{"sau ID 2, tối đa 2 task", task.Filter{AfterID: 2, Limit: 2}, []int{3, 4}},
+		{"sau ID cuối", task.Filter{AfterID: 5}, []int{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

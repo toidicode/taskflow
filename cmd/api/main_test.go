@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -50,7 +53,7 @@ func TestRoutes(t *testing.T) {
 		{"một project", "GET", "/api/v1/projects/1", 200, `{"id":1,"name":"TaskFlow API","owner_id":1}` + "\n", ""},
 		{"task của project", "GET", "/api/v1/projects/2/tasks", 200, `[{"id":4,"project_id":2,"title":"Viết tài liệu","status":"todo"}]`, ""},
 		{"task của project, lọc status", "GET", "/api/v1/projects/1/tasks?status=done", 200, `"title":"Thiết kế database","status":"done","completed_at":"`, ""},
-		{"lọc không có task nào", "GET", "/api/v1/projects/2/tasks?status=done", 200, "[]\n", ""},
+		{"lọc không có task nào", "GET", "/api/v1/projects/2/tasks?status=done", 200, `{"data":[]}` + "\n", ""},
 		{"project không có", "GET", "/api/v1/projects/9/tasks", 404, `{"error":"project #9: không tìm thấy"}`, ""},
 		{"tất cả task", "GET", "/api/v1/tasks", 200, `"title":"Viết tài liệu","status":"todo"}]`, ""},
 		{"lọc status", "GET", "/api/v1/tasks?status=doing", 200, `[{"id":2,"project_id":1,"title":"Viết API danh sách task","status":"doing"}]`, ""},
@@ -60,7 +63,7 @@ func TestRoutes(t *testing.T) {
 		{"id không phải số", "GET", "/api/v1/tasks/abc", 400, `{"error":"tham số không hợp lệ","fields":{"id":"cần một số nguyên dương, nhận \"abc\""}}`, ""},
 		{"task không có", "GET", "/api/v1/tasks/99", 404, `{"error":"task #99: không tìm thấy"}`, ""},
 		{"xóa task không có", "DELETE", "/api/v1/tasks/99", 404, `{"error":"task #99: không tìm thấy"}`, ""},
-		{"xóa project còn task", "DELETE", "/api/v1/projects/1", 409, `{"error":"project #1 vẫn còn task`, ""},
+		{"xóa project còn task", "DELETE", "/api/v1/projects/1", 409, `{"error":"project #1: vẫn còn task, hãy xóa task trước"}`, ""},
 		{"sai method", "PUT", "/api/v1/tasks", 405, "Method Not Allowed", "GET, HEAD, POST"},
 		{"sai method có id", "PUT", "/api/v1/tasks/2", 405, "Method Not Allowed", "DELETE, GET, HEAD, PATCH"},
 		{"không có route", "GET", "/api/v1/users", 404, "404 page not found", ""},
@@ -164,6 +167,16 @@ func TestValidation(t *testing.T) {
 			`{"error":"field \"name\" sai kiểu, cần string"}`},
 		{"status trên query sai", "GET", "/api/v1/projects/1/tasks?status=xong", "", 400,
 			`{"error":"tham số không hợp lệ","fields":{"status":"trạng thái \"xong\" không hợp lệ, chọn todo, doing hoặc done"}}`},
+		{"limit và cursor sai", "GET", "/api/v1/tasks?limit=500&cursor=abc", "", 400,
+			`{"error":"tham số không hợp lệ","fields":{"cursor":"cursor không hợp lệ","limit":"cần một số từ 1 tới 100"}}`},
+		{"limit không phải số", "GET", "/api/v1/tasks?limit=mot", "", 400,
+			`{"error":"tham số không hợp lệ","fields":{"limit":"cần một số từ 1 tới 100"}}`},
+		{"tag quá dài", "POST", "/api/v1/tasks", `{"project_id": 1, "title": "Viết API", "tags": ["` + long(31) + `"]}`, 422,
+			`{"error":"dữ liệu không hợp lệ","fields":{"tags":"tên tag tối đa 30 ký tự"}}`},
+		{"tag rỗng", "POST", "/api/v1/tasks/1/tags", `{"name": "  "}`, 422,
+			`{"error":"dữ liệu không hợp lệ","fields":{"name":"tên tag không được để trống"}}`},
+		{"gắn tag cho task không có", "POST", "/api/v1/tasks/9/tags", `{"name": "go"}`, 404,
+			`{"error":"task #9: không tìm thấy"}`},
 	}
 
 	for _, tt := range tests {
@@ -298,16 +311,105 @@ func TestGetTaskPathValue(t *testing.T) {
 	}
 }
 
-func TestListTasksHeaders(t *testing.T) {
-	_, tasks := newTestStores(t)
-	rec := httptest.NewRecorder()
-	listTasks(tasks).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/tasks?status=todo", nil))
-
-	if got := rec.Header().Get("X-Total-Count"); got != "2" {
-		t.Errorf("X-Total-Count = %q, muốn %q", got, "2")
+// listPage gọi GET target rồi đọc body thành một trang task.
+func listPage(t *testing.T, h http.Handler, target string) page[task.Task] {
+	t.Helper()
+	rec := send(h, "GET", target, "")
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("GET %s: %d %s", target, rec.Code, rec.Body)
 	}
-	if got := rec.Header().Get("Content-Type"); got != "application/json" {
-		t.Errorf("Content-Type = %q", got)
+	var p page[task.Task]
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestListTasksPages(t *testing.T) {
+	mux := newMux(newTestStores(t)) // 4 task, ID 1..4
+
+	// đi hết các trang 3 task: trang cuối không có next_cursor
+	var ids []int
+	cursor, pages := "", 0
+	for {
+		p := listPage(t, mux, "/api/v1/tasks?limit=3&cursor="+cursor)
+		pages++
+		for _, tk := range p.Data {
+			ids = append(ids, tk.ID)
+		}
+		if p.NextCursor == "" {
+			break
+		}
+		cursor = p.NextCursor
+	}
+	if pages != 2 || !slices.Equal(ids, []int{1, 2, 3, 4}) {
+		t.Errorf("%d trang, ID %v; muốn 2 trang, ID [1 2 3 4]", pages, ids)
+	}
+
+	// đúng 4 task với limit=4: không còn trang sau
+	if p := listPage(t, mux, "/api/v1/tasks?limit=4"); len(p.Data) != 4 || p.NextCursor != "" {
+		t.Errorf("limit=4: %d task, next_cursor %q", len(p.Data), p.NextCursor)
+	}
+	// cursor kết hợp với bộ lọc: task todo sau task #3
+	if p := listPage(t, mux, "/api/v1/tasks?status=todo&cursor="+encodeCursor(3)); len(p.Data) != 1 || p.Data[0].ID != 4 {
+		t.Errorf("todo sau #3: %+v", p.Data)
+	}
+}
+
+func TestTaskTags(t *testing.T) {
+	mux := newMux(newTestStores(t))
+
+	// tạo task kèm tag: tag được chuẩn hóa, bỏ trùng và sắp xếp
+	rec := send(mux, "POST", "/api/v1/tasks", `{"project_id": 1, "title": "Viết migration", "tags": ["Database", "go ", "database"]}`)
+	if want := `"tags":["database","go"]}`; rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), want) {
+		t.Fatalf("POST: %d %s, muốn chứa %s", rec.Code, rec.Body, want)
+	}
+	rec = send(mux, "POST", "/api/v1/tasks/5/tags", `{"name": "Backend"}`)
+	if want := `"tags":["backend","database","go"]}`; rec.Code != 200 || !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("thêm tag: %d %s", rec.Code, rec.Body)
+	}
+	if rec = send(mux, "DELETE", "/api/v1/tasks/5/tags/go", ""); rec.Code != http.StatusNoContent {
+		t.Errorf("gỡ tag: %d %s", rec.Code, rec.Body)
+	}
+	// gỡ tag task không có vẫn là 204, task không có thì 404
+	if rec = send(mux, "DELETE", "/api/v1/tasks/5/tags/go", ""); rec.Code != http.StatusNoContent {
+		t.Errorf("gỡ tag lần hai: %d", rec.Code)
+	}
+	if rec = send(mux, "DELETE", "/api/v1/tasks/9/tags/go", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("gỡ tag task không có: %d", rec.Code)
+	}
+
+	// lọc theo tag
+	if p := listPage(t, mux, "/api/v1/tasks?tag=Backend"); len(p.Data) != 1 || p.Data[0].ID != 5 ||
+		!slices.Equal(p.Data[0].Tags, []string{"backend", "database"}) {
+		t.Errorf("?tag=Backend: %+v", p.Data)
+	}
+
+	// PATCH tags thay toàn bộ, không gửi tags thì giữ nguyên, [] là xóa hết
+	rec = send(mux, "PATCH", "/api/v1/tasks/5", `{"tags": ["sql"]}`)
+	if !strings.Contains(rec.Body.String(), `"tags":["sql"]}`) {
+		t.Errorf("PATCH tags: %d %s", rec.Code, rec.Body)
+	}
+	rec = send(mux, "PATCH", "/api/v1/tasks/5", `{"title": "Viết migration 00003"}`)
+	if !strings.Contains(rec.Body.String(), `"tags":["sql"]}`) {
+		t.Errorf("PATCH không gửi tags: %d %s", rec.Code, rec.Body)
+	}
+	rec = send(mux, "PATCH", "/api/v1/tasks/5", `{"tags": []}`)
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "tags") {
+		t.Errorf("PATCH tags rỗng: %d %s", rec.Code, rec.Body)
+	}
+
+	// tối đa MaxTags tag cho một task
+	for i := range task.MaxTags {
+		send(mux, "POST", "/api/v1/tasks/5/tags", fmt.Sprintf(`{"name": "tag%d"}`, i))
+	}
+	rec = send(mux, "POST", "/api/v1/tasks/5/tags", `{"name": "thua"}`)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "task đã có đủ 10 tag") {
+		t.Errorf("tag thứ 11: %d %s", rec.Code, rec.Body)
+	}
+	// gắn lại tag đã có thì không tính là thêm
+	if rec = send(mux, "POST", "/api/v1/tasks/5/tags", `{"name": "tag0"}`); rec.Code != 200 {
+		t.Errorf("gắn lại tag đã có: %d %s", rec.Code, rec.Body)
 	}
 }
 
@@ -344,5 +446,34 @@ func TestStoreError(t *testing.T) {
 	// chi tiết lỗi chỉ nằm trong log, không gửi cho client
 	if e := logEntries(t, logs); len(e) != 1 || e[0]["msg"] != "store" || e[0]["err"] != "liệt kê task: kết nối bị đóng" {
 		t.Errorf("log = %v", e)
+	}
+}
+
+// vanishingProject là task.Store giả lập project bị xóa ngay sau lúc handler kiểm tra:
+// Add và Update trả project.ErrNotFound như TaskStore của PostgreSQL khi khóa ngoại chặn.
+type vanishingProject struct{ *task.MemoryStore }
+
+func (vanishingProject) Add(_ context.Context, t *task.Task) error {
+	return fmt.Errorf("project #%d: %w", t.ProjectID, project.ErrNotFound)
+}
+
+func (vanishingProject) Update(_ context.Context, t *task.Task) error {
+	return fmt.Errorf("project #%d: %w", t.ProjectID, project.ErrNotFound)
+}
+
+func TestTaskProjectDeleted(t *testing.T) {
+	projects, tasks := newTestStores(t)
+	mux := newMux(projects, vanishingProject{tasks})
+
+	// cùng response với khi project_id không tồn tại từ đầu: 422, không phải 500
+	want := `{"error":"dữ liệu không hợp lệ","fields":{"project_id":"không có project #1"}}` + "\n"
+	for _, req := range []struct{ method, target, body string }{
+		{"POST", "/api/v1/tasks", `{"project_id": 1, "title": "Viết API"}`},
+		{"PATCH", "/api/v1/tasks/1", `{"title": "Viết API"}`},
+	} {
+		rec := send(mux, req.method, req.target, req.body)
+		if rec.Code != http.StatusUnprocessableEntity || rec.Body.String() != want {
+			t.Errorf("%s %s: %d %s", req.method, req.target, rec.Code, rec.Body)
+		}
 	}
 }

@@ -19,12 +19,17 @@ var ErrNotFound = errors.New("không tìm thấy")
 type Filter struct {
 	ProjectID int     // 0: mọi project
 	Status    *Status // nil: mọi trạng thái (StatusTodo là 0 nên phải dùng con trỏ)
+	Tag       string  // "": không lọc theo tag
+	AfterID   int     // chỉ lấy task có ID lớn hơn AfterID (phân trang theo cursor)
+	Limit     int     // số task tối đa, 0: không giới hạn
 }
 
-// Match cho biết t có thỏa f không.
+// Match cho biết t có thỏa các điều kiện lọc của f không (không tính Limit).
 func (f Filter) Match(t Task) bool {
 	return (f.ProjectID == 0 || t.ProjectID == f.ProjectID) &&
-		(f.Status == nil || t.Status == *f.Status)
+		(f.Status == nil || t.Status == *f.Status) &&
+		(f.Tag == "" || t.HasTag(f.Tag)) &&
+		t.ID > f.AfterID
 }
 
 // Store là nơi lưu và tìm task. Mọi method nhận context để dừng được khi request bị hủy,
@@ -41,11 +46,17 @@ type Store interface {
 	Delete(ctx context.Context, id int) error
 	// List trả về các task thỏa f, sắp xếp theo ID.
 	List(ctx context.Context, f Filter) ([]Task, error)
+	// AddTag gắn tag name (đã chuẩn hóa) vào task taskID, task đã có tag đó thì không làm gì.
+	// Lỗi wrap ErrNotFound khi không có task đó.
+	AddTag(ctx context.Context, taskID int, name string) error
+	// RemoveTag gỡ tag name khỏi task taskID, task không có tag đó thì không làm gì.
+	// Lỗi wrap ErrNotFound khi không có task đó.
+	RemoveTag(ctx context.Context, taskID int, name string) error
 }
 
 // MemoryStore lưu task trong bộ nhớ, dùng được từ nhiều goroutine.
-// Map chứa giá trị Task: mọi method đều chép task ra/vào, bên ngoài không giữ được
-// con trỏ tới dữ liệu của store.
+// Map chứa giá trị Task: mọi method đều chép task ra/vào (kể cả slice Tags),
+// bên ngoài không giữ được con trỏ tới dữ liệu của store.
 type MemoryStore struct {
 	mu     sync.RWMutex // bảo vệ tasks và nextID
 	tasks  map[int]Task
@@ -68,8 +79,14 @@ func (s *MemoryStore) Add(ctx context.Context, t *Task) error {
 	defer s.mu.Unlock()
 	t.ID = s.nextID
 	s.nextID++
-	s.tasks[t.ID] = *t // lưu bản sao: sửa *t sau này không đổi dữ liệu trong store
+	s.tasks[t.ID] = clone(*t) // lưu bản sao: sửa *t sau này không đổi dữ liệu trong store
 	return nil
+}
+
+// clone chép t kèm mảng của slice Tags: Task chép bằng phép gán vẫn dùng chung mảng đó.
+func clone(t Task) Task {
+	t.Tags = slices.Clone(t.Tags)
+	return t
 }
 
 func (s *MemoryStore) Get(ctx context.Context, id int) (Task, error) {
@@ -79,7 +96,7 @@ func (s *MemoryStore) Get(ctx context.Context, id int) (Task, error) {
 	if !ok {
 		return Task{}, fmt.Errorf("task #%d: %w", id, ErrNotFound)
 	}
-	return t, nil // t là bản sao của giá trị trong map
+	return clone(t), nil
 }
 
 func (s *MemoryStore) Update(ctx context.Context, t *Task) error {
@@ -88,7 +105,7 @@ func (s *MemoryStore) Update(ctx context.Context, t *Task) error {
 	if _, ok := s.tasks[t.ID]; !ok {
 		return fmt.Errorf("task #%d: %w", t.ID, ErrNotFound)
 	}
-	s.tasks[t.ID] = *t
+	s.tasks[t.ID] = clone(*t)
 	return nil
 }
 
@@ -108,11 +125,40 @@ func (s *MemoryStore) List(ctx context.Context, f Filter) ([]Task, error) {
 	tasks := []Task{} // không phải nil slice: không có task thì JSON là [] thay vì null
 	for t := range maps.Values(s.tasks) {
 		if f.Match(t) {
-			tasks = append(tasks, t)
+			tasks = append(tasks, clone(t))
 		}
 	}
 	slices.SortFunc(tasks, func(a, b Task) int { return cmp.Compare(a.ID, b.ID) })
+	if f.Limit > 0 && len(tasks) > f.Limit {
+		tasks = tasks[:f.Limit]
+	}
 	return tasks, nil
+}
+
+func (s *MemoryStore) AddTag(ctx context.Context, taskID int, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("task #%d: %w", taskID, ErrNotFound)
+	}
+	if !t.HasTag(name) {
+		t.Tags = NormalizeTags(append(slices.Clone(t.Tags), name))
+		s.tasks[taskID] = t
+	}
+	return nil
+}
+
+func (s *MemoryStore) RemoveTag(ctx context.Context, taskID int, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("task #%d: %w", taskID, ErrNotFound)
+	}
+	t.Tags = slices.DeleteFunc(slices.Clone(t.Tags), func(tag string) bool { return tag == name })
+	s.tasks[taskID] = t
+	return nil
 }
 
 // Save ghi mọi task ra file path dưới dạng JSON.

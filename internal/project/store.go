@@ -13,6 +13,9 @@ import (
 // ErrNotFound được trả về (đã wrap) khi không có project cần tìm.
 var ErrNotFound = errors.New("không tìm thấy")
 
+// ErrHasTasks được trả về (đã wrap) khi xóa một project vẫn còn task.
+var ErrHasTasks = errors.New("vẫn còn task, hãy xóa task trước")
+
 // Store là nơi lưu và tìm project, cùng quy ước với task.Store:
 // nhận context, trả về lỗi và trả về bản sao.
 type Store interface {

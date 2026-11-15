@@ -10,7 +10,7 @@ import (
 )
 
 // tables là các bảng mà migration tạo ra.
-var tables = []string{"projects", "tasks", "users"}
+var tables = []string{"projects", "tasks", "users", "tags", "task_tags"}
 
 // tableExists cho biết bảng name có trong database không.
 func tableExists(t *testing.T, db *sql.DB, name string) bool {
