@@ -214,6 +214,7 @@ func updateTask(s stores) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		wasDone := t.IsDone() // trước khi sửa: chỉ báo khi task vừa chuyển sang done
 		me := userIDFrom(r.Context())
 		if !in.onlyStatus() && !task.CanEdit(me, p, t) {
 			forbidden(w, "người được giao chỉ được đổi status của task")
@@ -249,6 +250,9 @@ func updateTask(s stores) http.HandlerFunc {
 		if err := s.tasks.Update(r.Context(), &t); err != nil {
 			saveTaskError(w, r, &t, err)
 			return
+		}
+		if !wasDone && t.IsDone() {
+			notifyTaskDone(r, s, t, p) // chạy nền, response không phải chờ
 		}
 		writeJSON(w, http.StatusOK, t)
 	}

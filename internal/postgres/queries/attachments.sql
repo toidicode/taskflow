@@ -15,3 +15,8 @@ ORDER BY id;
 -- name: DeleteAttachment :execrows
 DELETE FROM attachments
 WHERE id = $1;
+
+-- name: KnownStoredNames :many
+-- Những tên trong danh sách đang có hàng trỏ tới, dùng khi dọn file mồ côi.
+SELECT stored_name FROM attachments
+WHERE stored_name = ANY(@stored_names::text[]);

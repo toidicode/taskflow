@@ -46,6 +46,11 @@ func TestAttachmentStore(t *testing.T) {
 		t.Errorf("Add() vào task #99: %v, muốn task.ErrNotFound", err)
 	}
 
+	known, err := attachments.KnownFiles(ctx, []string{"ABC", "KHONG-CO"})
+	if err != nil || len(known) != 1 || !known["ABC"] {
+		t.Errorf("KnownFiles() = %v, %v, muốn chỉ ABC", known, err)
+	}
+
 	if err := attachments.Delete(ctx, a.ID); err != nil {
 		t.Fatal(err)
 	}

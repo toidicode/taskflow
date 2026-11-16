@@ -108,3 +108,26 @@ func TestDiskSaveErrorLeavesNoFile(t *testing.T) {
 		t.Errorf("còn %d file sau khi Save lỗi", len(entries))
 	}
 }
+
+func TestDiskList(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	d, err := NewDisk(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for _, name := range []string{"b", "a"} {
+		if _, err := d.Save(ctx, name, strings.NewReader("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.Mkdir(filepath.Join(dir, "con"), 0o750) // thư mục con không phải file đính kèm
+	files, err := d.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Name != "a" || files[1].Name != "b" || files[0].ModTime.IsZero() {
+		t.Errorf("List() = %v, muốn hai file a, b", files)
+	}
+}

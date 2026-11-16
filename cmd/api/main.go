@@ -14,6 +14,8 @@ import (
 
 	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/auth"
+	"github.com/toidicode/taskflow/internal/jobs"
+	"github.com/toidicode/taskflow/internal/notify"
 	"github.com/toidicode/taskflow/internal/postgres"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/storage"
@@ -49,6 +51,15 @@ func main() {
 	if err != nil {
 		slog.Error("khởi tạo store", "err", err)
 		os.Exit(1)
+	}
+
+	// việc nền chạy trong cùng process; Bài 38 gọi s.jobs.Stop(ctx) khi server tắt
+	s.jobs = jobs.New(jobs.Options{Workers: cfg.Workers, QueueSize: cfg.QueueSize})
+	s.notifier = notify.Log{Logger: slog.Default()} // chưa có email: thông báo chỉ ghi ra log
+	s.jobs.Start()
+	if cfg.CleanupEvery > 0 {
+		s.jobs.Enqueue(cleanupJob(s)) // dọn một lần lúc khởi động, sau đó theo chu kỳ
+		s.jobs.Every(cfg.CleanupEvery, cleanupJob(s))
 	}
 
 	tokens := auth.NewTokens([]byte(cfg.JWTSecret), cfg.JWTTTL)

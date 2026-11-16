@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/auth"
+	"github.com/toidicode/taskflow/internal/jobs"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/storage"
 	"github.com/toidicode/taskflow/internal/task"
@@ -38,7 +40,11 @@ func newTestStores(t *testing.T) stores {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { files.Close() })
-	return stores{projects: projects, tasks: tasks, users: users, attachments: attachment.NewMemoryStore(), files: files}
+	d := jobs.New(jobs.Options{Workers: 1, Logger: slog.New(slog.DiscardHandler)})
+	d.Start()
+	t.Cleanup(func() { d.Stop(context.Background()) })
+	return stores{projects: projects, tasks: tasks, users: users, attachments: attachment.NewMemoryStore(), files: files,
+		jobs: d, notifier: &recordNotifier{}}
 }
 
 // testTokens phát và kiểm tra token trong test, secret này chỉ dùng cho test.

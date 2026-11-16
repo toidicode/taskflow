@@ -9,6 +9,8 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 const createAttachment = `-- name: CreateAttachment :one
@@ -77,6 +79,35 @@ func (q *Queries) GetAttachment(ctx context.Context, id int64) (Attachment, erro
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const knownStoredNames = `-- name: KnownStoredNames :many
+SELECT stored_name FROM attachments
+WHERE stored_name = ANY($1::text[])
+`
+
+// Những tên trong danh sách đang có hàng trỏ tới, dùng khi dọn file mồ côi.
+func (q *Queries) KnownStoredNames(ctx context.Context, storedNames []string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, knownStoredNames, pq.Array(storedNames))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var stored_name string
+		if err := rows.Scan(&stored_name); err != nil {
+			return nil, err
+		}
+		items = append(items, stored_name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAttachments = `-- name: ListAttachments :many

@@ -92,6 +92,21 @@ func (s *AttachmentStore) Delete(ctx context.Context, id int) error {
 	return nil
 }
 
+func (s *AttachmentStore) KnownFiles(ctx context.Context, storedNames []string) (map[string]bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
+	names, err := s.q.KnownStoredNames(ctx, storedNames)
+	if err != nil {
+		return nil, fmt.Errorf("tìm file có attachment: %w", err)
+	}
+	known := make(map[string]bool, len(names))
+	for _, name := range names {
+		known[name] = true
+	}
+	return known, nil
+}
+
 // toAttachment đổi một hàng của bảng attachments sang attachment.Attachment.
 func toAttachment(row dbgen.Attachment) attachment.Attachment {
 	return attachment.Attachment{

@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"time"
 )
 
 // Storage là nơi lưu nội dung file theo tên. Tên do server đặt (VD rand.Text()),
@@ -20,6 +21,14 @@ type Storage interface {
 	Open(ctx context.Context, name string) (io.ReadSeekCloser, error)
 	// Remove xóa file name, không có file đó thì không lỗi.
 	Remove(ctx context.Context, name string) error
+	// List trả về mọi file đang lưu, dùng cho việc dọn file mồ côi.
+	List(ctx context.Context) ([]File, error)
+}
+
+// File là một file trong Storage.
+type File struct {
+	Name    string
+	ModTime time.Time // lần ghi cuối
 }
 
 // Disk lưu file trong một thư mục. Mọi thao tác đi qua os.Root nên tên file nào
@@ -68,6 +77,28 @@ func (d *Disk) Remove(ctx context.Context, name string) error {
 		return err
 	}
 	return nil
+}
+
+func (d *Disk) List(ctx context.Context) ([]File, error) {
+	entries, err := fs.ReadDir(d.root.FS(), ".")
+	if err != nil {
+		return nil, err
+	}
+	var files []File
+	for _, e := range entries {
+		if !e.Type().IsRegular() { // bỏ qua thư mục con, symlink
+			continue
+		}
+		info, err := e.Info()
+		if errors.Is(err, fs.ErrNotExist) { // vừa bị xóa trong lúc đọc thư mục
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, File{Name: e.Name(), ModTime: info.ModTime()})
+	}
+	return files, nil
 }
 
 // Close đóng thư mục gốc, sau đó không dùng d được nữa.

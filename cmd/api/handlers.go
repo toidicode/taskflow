@@ -8,19 +8,23 @@ import (
 
 	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/auth"
+	"github.com/toidicode/taskflow/internal/jobs"
+	"github.com/toidicode/taskflow/internal/notify"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/storage"
 	"github.com/toidicode/taskflow/internal/task"
 	"github.com/toidicode/taskflow/internal/user"
 )
 
-// stores gom các store mà handler cần.
+// stores gom các store và dịch vụ mà handler cần.
 type stores struct {
 	projects    project.Store
 	tasks       task.Store
 	users       user.Store
 	attachments attachment.Store // thông tin file đính kèm
 	files       storage.Storage  // nội dung file đính kèm
+	jobs        *jobs.Dispatcher // việc nền
+	notifier    notify.Notifier  // gửi thông báo (trong job)
 }
 
 // newMux tạo ServeMux chứa các route của API. Route dưới /api/v1 cần access token,

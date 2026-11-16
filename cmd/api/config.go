@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -24,6 +25,9 @@ type Config struct {
 	JWTSecret    string        // secret ký access token, ai có nó là ký được token của mọi user
 	JWTTTL       time.Duration // thời gian sống của access token
 	UploadDir    string        // thư mục lưu file upload
+	Workers      int           // số worker chạy việc nền
+	QueueSize    int           // số việc nền chờ tối đa
+	CleanupEvery time.Duration // chu kỳ dọn file mồ côi, 0 là tắt
 	Migrate      bool          // chạy migration rồi thoát, không chạy server
 }
 
@@ -42,6 +46,9 @@ func defaultConfig() Config {
 		IdleTimeout:  60 * time.Second,
 		JWTTTL:       15 * time.Minute,
 		UploadDir:    "uploads",
+		Workers:      4,
+		QueueSize:    100,
+		CleanupEvery: time.Hour,
 	}
 }
 
@@ -67,6 +74,9 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	env.str("TASKFLOW_JWT_SECRET", &cfg.JWTSecret)
 	env.duration("TASKFLOW_JWT_TTL", &cfg.JWTTTL)
 	env.str("TASKFLOW_UPLOAD_DIR", &cfg.UploadDir)
+	env.int("TASKFLOW_WORKERS", &cfg.Workers)
+	env.int("TASKFLOW_QUEUE_SIZE", &cfg.QueueSize)
+	env.duration("TASKFLOW_CLEANUP_INTERVAL", &cfg.CleanupEvery)
 	if err := errors.Join(env.errs...); err != nil {
 		return cfg, err
 	}
@@ -83,6 +93,9 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.DurationVar(&cfg.IdleTimeout, "idle-timeout", cfg.IdleTimeout, "keep-alive (TASKFLOW_IDLE_TIMEOUT)")
 	fs.DurationVar(&cfg.JWTTTL, "jwt-ttl", cfg.JWTTTL, "thời gian sống của access token (TASKFLOW_JWT_TTL)")
 	fs.StringVar(&cfg.UploadDir, "upload-dir", cfg.UploadDir, "thư mục lưu file upload (TASKFLOW_UPLOAD_DIR)")
+	fs.IntVar(&cfg.Workers, "workers", cfg.Workers, "số worker chạy việc nền (TASKFLOW_WORKERS)")
+	fs.IntVar(&cfg.QueueSize, "queue-size", cfg.QueueSize, "số việc nền chờ tối đa (TASKFLOW_QUEUE_SIZE)")
+	fs.DurationVar(&cfg.CleanupEvery, "cleanup-interval", cfg.CleanupEvery, "chu kỳ dọn file mồ côi, 0: tắt (TASKFLOW_CLEANUP_INTERVAL)")
 	// DatabaseURL, JWTSecret cố ý không có flag: tham số dòng lệnh lộ ra trong ps
 	// Migrate chỉ có flag: là một lệnh chạy một lần chứ không phải cấu hình lâu dài
 	fs.BoolVar(&cfg.Migrate, "migrate", false, "chạy migration database rồi thoát")
@@ -110,6 +123,19 @@ func (e *envReader) str(key string, dst *string) {
 	if v, ok := e.lookup(key); ok {
 		*dst = v
 	}
+}
+
+func (e *envReader) int(key string, dst *int) {
+	v, ok := e.lookup(key)
+	if !ok {
+		return
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s=%q: cần một số nguyên", key, v))
+		return
+	}
+	*dst = n
 }
 
 func (e *envReader) duration(key string, dst *time.Duration) {
@@ -159,6 +185,15 @@ func (c Config) validate() error {
 	if c.UploadDir == "" {
 		errs = append(errs, errors.New("upload-dir: không được để trống"))
 	}
+	if c.Workers < 1 {
+		errs = append(errs, fmt.Errorf("workers %d: phải lớn hơn 0", c.Workers))
+	}
+	if c.QueueSize < 1 {
+		errs = append(errs, fmt.Errorf("queue-size %d: phải lớn hơn 0", c.QueueSize))
+	}
+	if c.CleanupEvery < 0 {
+		errs = append(errs, fmt.Errorf("cleanup-interval %v: không được âm (0 là tắt)", c.CleanupEvery))
+	}
 	timeouts := []struct {
 		name string
 		d    time.Duration
@@ -192,5 +227,8 @@ func (c Config) LogValue() slog.Value {
 		slog.String("jwt_secret", hidden(c.JWTSecret)),
 		slog.String("jwt_ttl", c.JWTTTL.String()),
 		slog.String("upload_dir", c.UploadDir),
+		slog.Int("workers", c.Workers),
+		slog.Int("queue_size", c.QueueSize),
+		slog.String("cleanup_interval", c.CleanupEvery.String()),
 	)
 }

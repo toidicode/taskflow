@@ -48,6 +48,9 @@ func TestLoadConfig(t *testing.T) {
 			func(c Config) bool { return c.Addr == ":7000" && c.LogLevel == slog.LevelWarn && c.JWTTTL == time.Hour }},
 		{"env rỗng tắt CORS", nil, map[string]string{"TASKFLOW_CORS_ORIGIN": "", "TASKFLOW_JWT_SECRET": testJWTSecret},
 			func(c Config) bool { return c.CORSOrigin == "" }},
+		{"việc nền", []string{"-cleanup-interval", "0"},
+			map[string]string{"TASKFLOW_WORKERS": "8", "TASKFLOW_QUEUE_SIZE": "500", "TASKFLOW_JWT_SECRET": testJWTSecret},
+			func(c Config) bool { return c.Workers == 8 && c.QueueSize == 500 && c.CleanupEvery == 0 }},
 		{"-migrate không cần secret", []string{"-migrate"}, map[string]string{"DATABASE_URL": "postgres://u:p@db/taskflow"},
 			func(c Config) bool { return c.Migrate }},
 	}
@@ -79,6 +82,12 @@ func TestLoadConfigErrors(t *testing.T) {
 		{"secret quá ngắn", nil, map[string]string{"TASKFLOW_JWT_SECRET": "secret"}, []string{"TASKFLOW_JWT_SECRET: cần ít nhất 32 byte"}},
 		{"upload-dir rỗng", []string{"-upload-dir", ""}, map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
 			[]string{"upload-dir: không được để trống"}},
+		{"việc nền sai", []string{"-workers", "0", "-cleanup-interval", "-1m"},
+			map[string]string{"TASKFLOW_QUEUE_SIZE": "nhiều", "TASKFLOW_JWT_SECRET": testJWTSecret},
+			[]string{`TASKFLOW_QUEUE_SIZE="nhiều": cần một số nguyên`}},
+		{"workers và cleanup sai", []string{"-workers", "0", "-cleanup-interval", "-1m"},
+			map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
+			[]string{"workers 0: phải lớn hơn 0", "cleanup-interval -1m0s: không được âm"}},
 		{"thừa tham số", []string{"serve"}, nil, []string{`không nhận tham số "serve"`}},
 		{"-migrate thiếu DATABASE_URL", []string{"-migrate"}, nil, []string{"migrate: cần đặt DATABASE_URL"}},
 	}
@@ -122,7 +131,7 @@ func TestConfigLogValue(t *testing.T) {
 	if strings.Contains(buf.String(), "bi-mat") {
 		t.Errorf("log lộ mật khẩu: %s", buf.String())
 	}
-	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`} {
+	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("log thiếu %s: %s", want, buf.String())
 		}

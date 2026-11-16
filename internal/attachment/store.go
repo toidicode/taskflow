@@ -24,6 +24,8 @@ type Store interface {
 	List(ctx context.Context, taskID int) ([]Attachment, error)
 	// Delete xóa thông tin file id (không xóa nội dung trong storage), lỗi wrap ErrNotFound khi không có.
 	Delete(ctx context.Context, id int) error
+	// KnownFiles trả về những tên trong storedNames đang có hàng trỏ tới (theo StoredName).
+	KnownFiles(ctx context.Context, storedNames []string) (map[string]bool, error)
 }
 
 // MemoryStore lưu thông tin file trong bộ nhớ, dùng được từ nhiều goroutine.
@@ -83,4 +85,16 @@ func (s *MemoryStore) Delete(ctx context.Context, id int) error {
 	}
 	delete(s.attachments, id)
 	return nil
+}
+
+func (s *MemoryStore) KnownFiles(ctx context.Context, storedNames []string) (map[string]bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	known := make(map[string]bool)
+	for _, a := range s.attachments {
+		if slices.Contains(storedNames, a.StoredName) {
+			known[a.StoredName] = true
+		}
+	}
+	return known, nil
 }
