@@ -58,6 +58,11 @@ func TestLoadConfig(t *testing.T) {
 			func(c Config) bool { return c.ShutdownTimeout == 20*time.Second && c.ShutdownDelay == 3*time.Second }},
 		{"proxy tin cậy", nil, map[string]string{"TASKFLOW_TRUSTED_PROXIES": "10.39.0.10", "TASKFLOW_JWT_SECRET": testJWTSecret},
 			func(c Config) bool { return c.TrustedProxies == "10.39.0.10" }},
+		{"cache Redis", []string{"-cache-ttl", "30s"},
+			map[string]string{"TASKFLOW_REDIS_URL": "redis://:mat-khau@cache:6379/0", "TASKFLOW_CACHE_TTL": "5m", "TASKFLOW_JWT_SECRET": testJWTSecret},
+			func(c Config) bool {
+				return c.RedisURL == "redis://:mat-khau@cache:6379/0" && c.CacheTTL == 30*time.Second
+			}},
 		{"-healthcheck không cần secret", []string{"-healthcheck"}, map[string]string{"TASKFLOW_ADDR": ":9000"},
 			func(c Config) bool { return c.HealthCheck && c.Addr == ":9000" }},
 	}
@@ -99,6 +104,9 @@ func TestLoadConfigErrors(t *testing.T) {
 		{"-migrate thiếu DATABASE_URL", []string{"-migrate"}, nil, []string{"migrate: cần đặt DATABASE_URL"}},
 		{"proxy sai", []string{"-trusted-proxies", "caddy"}, map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
 			[]string{`trusted-proxies "caddy": cần một IP hoặc dải CIDR`}},
+		{"cache sai", []string{"-cache-ttl", "0s"},
+			map[string]string{"TASKFLOW_REDIS_URL": "http://cache:6379", "TASKFLOW_JWT_SECRET": testJWTSecret},
+			[]string{"TASKFLOW_REDIS_URL: redis: invalid URL scheme: http", "cache-ttl 0s: phải lớn hơn 0"}},
 		{"tắt server sai", []string{"-shutdown-timeout", "0s", "-shutdown-delay", "-1s"},
 			map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
 			[]string{"shutdown-timeout 0s: phải lớn hơn 0", "shutdown-delay -1s: không được âm"}},
@@ -136,6 +144,7 @@ func TestConfigLogValue(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.DatabaseURL = "postgres://taskflow:mat-khau-bi-mat@db:5432/taskflow"
 	cfg.JWTSecret = "jwt-secret-bi-mat-jwt-secret-bi-mat"
+	cfg.RedisURL = "redis://:redis-bi-mat@cache:6379/0"
 
 	var buf bytes.Buffer
 	newLogger(&buf, Config{LogFormat: "json"}).Info("đã đọc cấu hình", "config", cfg)
@@ -143,7 +152,7 @@ func TestConfigLogValue(t *testing.T) {
 	if strings.Contains(buf.String(), "bi-mat") {
 		t.Errorf("log lộ mật khẩu: %s", buf.String())
 	}
-	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`, `"shutdown_timeout":"8s"`} {
+	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`, `"shutdown_timeout":"8s"`, `"redis_url":"[đã ẩn]"`, `"cache_ttl":"1m0s"`} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("log thiếu %s: %s", want, buf.String())
 		}

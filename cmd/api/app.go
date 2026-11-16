@@ -12,6 +12,7 @@ import (
 
 	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/auth"
+	"github.com/toidicode/taskflow/internal/cache"
 	"github.com/toidicode/taskflow/internal/httpapi"
 	"github.com/toidicode/taskflow/internal/jobs"
 	"github.com/toidicode/taskflow/internal/notify"
@@ -108,6 +109,25 @@ func dbApp(db *sql.DB, files storage.Storage) *app {
 		db:          db,
 		ready:       httpapi.NewReadiness(db),
 	}
+}
+
+// useCache bọc store project của a bằng cache Redis ở url. Redis chưa chạy lúc khởi động thì chỉ cảnh báo:
+// go-redis tự kết nối khi Redis lên lại, trong lúc đó mọi request đọc thẳng database.
+func useCache(ctx context.Context, a *app, url string, ttl time.Duration) (*cache.Redis, *project.CachedStore, error) {
+	rc, err := cache.NewRedis(url)
+	if err != nil {
+		return nil, nil, err
+	}
+	pctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if err := rc.Ping(pctx); err != nil {
+		slog.Warn("chưa kết nối được Redis, tạm đọc thẳng database", "err", err)
+	} else {
+		slog.Info("đã kết nối Redis, bật cache cho project", "ttl", ttl)
+	}
+	cached := project.NewCachedStore(a.projects, rc, project.CacheOptions{TTL: ttl})
+	a.projects = cached // mọi nơi nhận a.projects (project.Service, task.Service) đi qua cache
+	return rc, cached, nil
 }
 
 // projectLookup cho task.MemoryStore đọc project trong store projects.

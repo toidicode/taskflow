@@ -12,9 +12,11 @@ import (
 	"testing"
 
 	"github.com/toidicode/taskflow/internal/attachment"
+	"github.com/toidicode/taskflow/internal/cache"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
 	"github.com/toidicode/taskflow/internal/testdb"
+	"github.com/toidicode/taskflow/internal/testredis"
 )
 
 // client gọi API qua HTTP thật, như một ứng dụng frontend, với token của một user.
@@ -88,7 +90,8 @@ func signUp(t *testing.T, srv *httptest.Server, name, email, password string) *c
 }
 
 // TestEndToEnd chạy một kịch bản đầy đủ qua HTTP thật: server httptest, http.Client và mọi middleware.
-// Cùng kịch bản chạy với store trong bộ nhớ và với PostgreSQL (khi có TASKFLOW_TEST_DATABASE_URL).
+// Cùng kịch bản chạy với store trong bộ nhớ, với PostgreSQL (khi có TASKFLOW_TEST_DATABASE_URL),
+// và hai bản có cache project: cache trong bộ nhớ, Redis thật (khi có thêm TASKFLOW_TEST_REDIS_URL).
 func TestEndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("test end-to-end chậm (bcrypt), bỏ qua khi chạy go test -short")
@@ -99,6 +102,17 @@ func TestEndToEnd(t *testing.T) {
 	}{
 		{"memory", func(t *testing.T) *app { return memoryApp(newTestFiles(t)) }},
 		{"postgres", func(t *testing.T) *app { return dbApp(testdb.New(t), newTestFiles(t)) }},
+		{"memory+cache", func(t *testing.T) *app {
+			a := memoryApp(newTestFiles(t))
+			a.projects = project.NewCachedStore(a.projects, cache.NewMemory(), project.CacheOptions{})
+			return a
+		}},
+		{"postgres+redis", func(t *testing.T) *app {
+			rc, prefix := testredis.New(t)
+			a := dbApp(testdb.New(t), newTestFiles(t))
+			a.projects = project.NewCachedStore(a.projects, rc, project.CacheOptions{Prefix: prefix})
+			return a
+		}},
 	}
 	for _, b := range backends {
 		t.Run(b.name, func(t *testing.T) {
@@ -116,6 +130,30 @@ func TestEndToEnd(t *testing.T) {
 			binh := signUp(t, srv, "Bình", "binh@example.com", "mat-khau-cua-binh")
 
 			p := call[project.Project](an, "POST", "/api/v1/projects", map[string]any{"name": "TaskFlow API"}, http.StatusCreated)
+
+			// đọc danh sách (bản có cache: lần sau trúng cache), rồi tạo, đổi tên, xóa project:
+			// mỗi lần ghi phải thấy ngay ở lần đọc kế tiếp
+			names := func() []string {
+				var out []string
+				for _, x := range call[[]project.Project](an, "GET", "/api/v1/projects", nil, http.StatusOK) {
+					out = append(out, x.Name)
+				}
+				return out
+			}
+			names()
+			p2 := call[project.Project](an, "POST", "/api/v1/projects", map[string]any{"name": "Website"}, http.StatusCreated)
+			call[project.Project](an, "PUT", fmt.Sprintf("/api/v1/projects/%d", p2.ID), map[string]any{"name": "Website mới"}, http.StatusOK)
+			if got := names(); !slices.Equal(got, []string{"TaskFlow API", "Website mới"}) {
+				t.Errorf("sau khi tạo và đổi tên: %q", got)
+			}
+			if got := call[project.Project](an, "GET", fmt.Sprintf("/api/v1/projects/%d", p2.ID), nil, http.StatusOK); got.Name != "Website mới" {
+				t.Errorf("GET project #%d: %q", p2.ID, got.Name)
+			}
+			an.do("DELETE", fmt.Sprintf("/api/v1/projects/%d", p2.ID), "", nil, http.StatusNoContent)
+			an.do("GET", fmt.Sprintf("/api/v1/projects/%d", p2.ID), "", nil, http.StatusNotFound)
+			if got := names(); !slices.Equal(got, []string{"TaskFlow API"}) {
+				t.Errorf("sau khi xóa: %q", got)
+			}
 			tk := call[task.Task](an, "POST", "/api/v1/tasks",
 				map[string]any{"project_id": p.ID, "title": "Viết test end-to-end", "assignee_id": 2}, http.StatusCreated)
 
@@ -151,9 +189,13 @@ func TestEndToEnd(t *testing.T) {
 				t.Errorf("thông báo: %+v, muốn một thông báo task #%d cho An", sent, tk.ID)
 			}
 
-			// server thật hỗ trợ đặt deadline cho từng request (Bài 35): không có cảnh báo nào trong log
+			// server thật hỗ trợ đặt deadline cho từng request (Bài 35), cache không lỗi: không có cảnh báo nào
+			// trong log, ngoài dòng log WARN của request 404 cố ý gửi ở trên
 			for _, e := range logEntries(t, logs) {
-				if e["level"] != "INFO" {
+				if e["msg"] == "request" && e["status"] == float64(http.StatusNotFound) {
+					continue
+				}
+				if e["level"] == "WARN" || e["level"] == "ERROR" {
 					t.Errorf("log %v: %v", e["level"], e["msg"])
 				}
 			}

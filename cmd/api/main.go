@@ -81,6 +81,20 @@ func run(cfg Config) error {
 		}()
 	}
 
+	if cfg.RedisURL != "" {
+		rc, cached, err := useCache(ctx, a, cfg.RedisURL, cfg.CacheTTL)
+		if err != nil {
+			return fmt.Errorf("cache: %w", err)
+		}
+		defer func() { // chạy trước khi đóng database: defer chạy theo thứ tự ngược
+			st := cached.Stats()
+			slog.Info("thống kê cache project", "hits", st.Hits, "misses", st.Misses, "errors", st.Errors)
+			rc.Close()
+		}()
+	} else {
+		slog.Info("chưa đặt TASKFLOW_REDIS_URL, không dùng cache")
+	}
+
 	ln, err := net.Listen("tcp", cfg.Addr) // mở cổng trước: cổng đã bị chiếm thì báo lỗi ngay
 	if err != nil {
 		return err
