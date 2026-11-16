@@ -136,7 +136,8 @@ func TestLogRequests(t *testing.T) {
 			}
 			e := entries[0]
 			want := map[string]any{"level": tt.wantLevel, "msg": "request", "request_id": "-",
-				"method": "POST", "path": "/x?a=1", "status": tt.status, "size": tt.size}
+				"method": "POST", "path": "/x?a=1", "status": tt.status, "size": tt.size,
+				"client_ip": "192.0.2.1"} // RemoteAddr mặc định của httptest.NewRequest
 			for k, v := range want {
 				if e[k] != v {
 					t.Errorf("%s = %v, muốn %v", k, e[k], v)
@@ -258,7 +259,7 @@ func TestCORS(t *testing.T) {
 
 func TestNewAPI(t *testing.T) {
 	logs := captureLog(t)
-	api := newAPI(newTestStores(t), testTokens, "http://localhost:5173")
+	api := newAPI(newTestStores(t), testTokens, "http://localhost:5173", nil)
 
 	rec := send(api, "GET", "/api/v1/tasks/2", "")
 	id := rec.Header().Get("X-Request-ID")

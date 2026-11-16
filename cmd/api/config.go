@@ -31,6 +31,7 @@ type Config struct {
 
 	ShutdownTimeout time.Duration // thời gian tối đa để tắt server: chờ request đang chạy và việc nền
 	ShutdownDelay   time.Duration // báo /ready 503 rồi chờ chừng này trước khi ngừng nhận kết nối
+	TrustedProxies  string        // IP/CIDR của reverse proxy được tin header X-Forwarded-For, cách nhau bởi dấu phẩy
 
 	Migrate     bool // chạy migration rồi thoát, không chạy server
 	HealthCheck bool // gọi /ready của server đang chạy rồi thoát với code 0 (ổn) hoặc 1
@@ -86,6 +87,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	env.duration("TASKFLOW_CLEANUP_INTERVAL", &cfg.CleanupEvery)
 	env.duration("TASKFLOW_SHUTDOWN_TIMEOUT", &cfg.ShutdownTimeout)
 	env.duration("TASKFLOW_SHUTDOWN_DELAY", &cfg.ShutdownDelay)
+	env.str("TASKFLOW_TRUSTED_PROXIES", &cfg.TrustedProxies)
 	if err := errors.Join(env.errs...); err != nil {
 		return cfg, err
 	}
@@ -107,6 +109,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.DurationVar(&cfg.CleanupEvery, "cleanup-interval", cfg.CleanupEvery, "chu kỳ dọn file mồ côi, 0: tắt (TASKFLOW_CLEANUP_INTERVAL)")
 	fs.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "thời gian tối đa để tắt server (TASKFLOW_SHUTDOWN_TIMEOUT)")
 	fs.DurationVar(&cfg.ShutdownDelay, "shutdown-delay", cfg.ShutdownDelay, "chờ sau khi /ready trả 503, trước khi ngừng nhận kết nối (TASKFLOW_SHUTDOWN_DELAY)")
+	fs.StringVar(&cfg.TrustedProxies, "trusted-proxies", cfg.TrustedProxies, "IP/CIDR của reverse proxy, cách nhau bởi dấu phẩy (TASKFLOW_TRUSTED_PROXIES)")
 	// DatabaseURL, JWTSecret cố ý không có flag: tham số dòng lệnh lộ ra trong ps
 	// Migrate chỉ có flag: là một lệnh chạy một lần chứ không phải cấu hình lâu dài
 	fs.BoolVar(&cfg.Migrate, "migrate", false, "chạy migration database rồi thoát")
@@ -206,6 +209,9 @@ func (c Config) validate() error {
 	if c.CleanupEvery < 0 {
 		errs = append(errs, fmt.Errorf("cleanup-interval %v: không được âm (0 là tắt)", c.CleanupEvery))
 	}
+	if _, err := parseTrustedProxies(c.TrustedProxies); err != nil {
+		errs = append(errs, fmt.Errorf("trusted-proxies %w", err))
+	}
 	if c.ShutdownDelay < 0 {
 		errs = append(errs, fmt.Errorf("shutdown-delay %v: không được âm", c.ShutdownDelay))
 	}
@@ -247,5 +253,6 @@ func (c Config) LogValue() slog.Value {
 		slog.String("cleanup_interval", c.CleanupEvery.String()),
 		slog.String("shutdown_timeout", c.ShutdownTimeout.String()),
 		slog.String("shutdown_delay", c.ShutdownDelay.String()),
+		slog.String("trusted_proxies", c.TrustedProxies),
 	)
 }

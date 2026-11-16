@@ -28,6 +28,7 @@ type ctxKey int
 const (
 	requestIDKey ctxKey = iota
 	userIDKey           // ID của user đã đăng nhập, do requireAuth gắn vào
+	clientIPKey         // IP của client, do clientIP gắn vào
 )
 
 // requestID gắn cho mỗi request một ID: lấy từ header X-Request-ID nếu hợp lệ,
@@ -102,7 +103,7 @@ func requestLogger(r *http.Request) *slog.Logger {
 	return slog.With("request_id", requestIDFrom(r.Context()))
 }
 
-// logRequests ghi một dòng log cho mỗi request: method, path, status, số byte, thời gian xử lý.
+// logRequests ghi một dòng log cho mỗi request: IP client, method, path, status, số byte, thời gian xử lý.
 // Lỗi 5xx ghi ở mức ERROR, 4xx ở mức WARN, còn lại INFO.
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +122,7 @@ func logRequests(next http.Handler) http.Handler {
 			level = slog.LevelWarn
 		}
 		requestLogger(r).LogAttrs(r.Context(), level, "request",
+			slog.String("client_ip", clientIPFrom(r)),
 			slog.String("method", r.Method),
 			slog.String("path", r.URL.RequestURI()),
 			slog.Int("status", rec.status),

@@ -94,7 +94,8 @@ func run(cfg Config) error {
 	}
 
 	tokens := auth.NewTokens([]byte(cfg.JWTSecret), cfg.JWTTTL)
-	srv := newServer(cfg, newAPI(s, tokens, cfg.CORSOrigin))
+	trusted, _ := parseTrustedProxies(cfg.TrustedProxies) // đã kiểm tra trong loadConfig
+	srv := newServer(cfg, newAPI(s, tokens, cfg.CORSOrigin, trusted))
 	slog.Info("TaskFlow API lắng nghe", "addr", cfg.Addr, "version", buildVersion())
 
 	go func() {

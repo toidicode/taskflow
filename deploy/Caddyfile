@@ -1,0 +1,17 @@
+# Caddy tự xin và gia hạn chứng chỉ Let's Encrypt cho domain, chuyển HTTP sang HTTPS.
+{$TASKFLOW_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	reverse_proxy api:8080 {
+		# API đang khởi động lại (deploy): giữ request và thử lại tới 10s thay vì trả 502 ngay
+		lb_try_duration 10s
+	}
+}

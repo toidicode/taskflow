@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strconv"
 
 	"github.com/toidicode/taskflow/internal/attachment"
@@ -70,11 +71,13 @@ func newMux(s stores, tokens *auth.Tokens) *http.ServeMux {
 }
 
 // newAPI bọc mux bằng các middleware dùng chung cho mọi route, theo thứ tự từ ngoài vào trong.
-func newAPI(s stores, tokens *auth.Tokens, corsOrigin string) http.Handler {
+// trusted là các proxy tin cậy (VD Caddy) được phép báo IP client qua X-Forwarded-For.
+func newAPI(s stores, tokens *auth.Tokens, corsOrigin string, trusted []netip.Prefix) http.Handler {
 	return chain(newMux(s, tokens),
-		requestID,    // ngoài cùng: các middleware sau đều đọc được ID
-		logRequests,  // log cả response 500 do recoverPanic trả về
-		recoverPanic, // bắt panic của mọi thứ phía trong
+		requestID,         // ngoài cùng: các middleware sau đều đọc được ID
+		clientIP(trusted), // trước logRequests để log có IP thật của client
+		logRequests,       // log cả response 500 do recoverPanic trả về
+		recoverPanic,      // bắt panic của mọi thứ phía trong
 		cors(corsOrigin),
 	)
 }

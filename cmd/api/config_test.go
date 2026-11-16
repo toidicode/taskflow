@@ -56,6 +56,8 @@ func TestLoadConfig(t *testing.T) {
 		{"tắt server", []string{"-shutdown-timeout", "20s"},
 			map[string]string{"TASKFLOW_SHUTDOWN_TIMEOUT": "5s", "TASKFLOW_SHUTDOWN_DELAY": "3s", "TASKFLOW_JWT_SECRET": testJWTSecret},
 			func(c Config) bool { return c.ShutdownTimeout == 20*time.Second && c.ShutdownDelay == 3*time.Second }},
+		{"proxy tin cậy", nil, map[string]string{"TASKFLOW_TRUSTED_PROXIES": "10.39.0.10", "TASKFLOW_JWT_SECRET": testJWTSecret},
+			func(c Config) bool { return c.TrustedProxies == "10.39.0.10" }},
 		{"-healthcheck không cần secret", []string{"-healthcheck"}, map[string]string{"TASKFLOW_ADDR": ":9000"},
 			func(c Config) bool { return c.HealthCheck && c.Addr == ":9000" }},
 	}
@@ -95,6 +97,8 @@ func TestLoadConfigErrors(t *testing.T) {
 			[]string{"workers 0: phải lớn hơn 0", "cleanup-interval -1m0s: không được âm"}},
 		{"thừa tham số", []string{"serve"}, nil, []string{`không nhận tham số "serve"`}},
 		{"-migrate thiếu DATABASE_URL", []string{"-migrate"}, nil, []string{"migrate: cần đặt DATABASE_URL"}},
+		{"proxy sai", []string{"-trusted-proxies", "caddy"}, map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
+			[]string{`trusted-proxies "caddy": cần một IP hoặc dải CIDR`}},
 		{"tắt server sai", []string{"-shutdown-timeout", "0s", "-shutdown-delay", "-1s"},
 			map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
 			[]string{"shutdown-timeout 0s: phải lớn hơn 0", "shutdown-delay -1s: không được âm"}},

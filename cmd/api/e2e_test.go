@@ -104,7 +104,7 @@ func TestEndToEnd(t *testing.T) {
 		t.Run(b.name, func(t *testing.T) {
 			logs := captureLog(t) // log của server không lẫn vào output của go test
 			s := withTestJobs(t, b.open(t))
-			srv := httptest.NewServer(newAPI(s, testTokens, "http://localhost:5173"))
+			srv := httptest.NewServer(newAPI(s, testTokens, "http://localhost:5173", nil))
 			t.Cleanup(func() { // đăng ký trước nên chạy sau srv.Close
 				if t.Failed() {
 					t.Logf("log của server:\n%s", logs)
@@ -164,7 +164,7 @@ func TestEndToEnd(t *testing.T) {
 // TestTLS chạy API sau HTTPS với HTTP/2, chứng chỉ tự ký do httptest tạo.
 func TestTLS(t *testing.T) {
 	captureLog(t)
-	srv := httptest.NewUnstartedServer(newAPI(newTestStores(t), testTokens, "http://localhost:5173"))
+	srv := httptest.NewUnstartedServer(newAPI(newTestStores(t), testTokens, "http://localhost:5173", nil))
 	srv.EnableHTTP2 = true
 	srv.StartTLS()
 	t.Cleanup(srv.Close)

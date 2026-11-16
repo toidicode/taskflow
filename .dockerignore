@@ -4,5 +4,7 @@ bin/
 uploads/
 tasks.json
 *.out
+# file deploy (có thể có .env chứa secret) không thuộc về image
+deploy/
 Dockerfile
 .dockerignore

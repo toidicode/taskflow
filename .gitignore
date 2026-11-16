@@ -1,3 +1,5 @@
 /bin/
 tasks.json
 /uploads/
+/deploy/.env
+/deploy/backups/
