@@ -11,11 +11,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/jobs"
 	"github.com/toidicode/taskflow/internal/notify"
 	"github.com/toidicode/taskflow/internal/storage"
 )
+
+func TestMain(m *testing.M) {
+	gin.SetMode(gin.TestMode) // không in route và cảnh báo của chế độ debug ra output của go test
+	m.Run()
+}
 
 // Các helper nhỏ dưới đây giống bản trong internal/httpapi: test của hai package không dùng chung được
 // hàm trong file _test.go của nhau.

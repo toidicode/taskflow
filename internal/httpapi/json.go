@@ -9,6 +9,8 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 // maxBodyBytes giới hạn kích thước body JSON của request: 1 MB.
@@ -18,16 +20,16 @@ const maxBodyBytes = 1 << 20
 var errUnsupportedMediaType = errors.New("Content-Type phải là application/json")
 
 // writeJSON mã hóa v thành JSON rồi ghi ra response với status code cho trước.
-func writeJSON(w http.ResponseWriter, status int, v any) {
+// Khác c.JSON của Gin: Content-Type đúng "application/json", body kết thúc bằng xuống dòng như
+// từ Bài 25, và lỗi mã hóa thành 500 thay vì một response dở dang.
+func writeJSON(c *gin.Context, status int, v any) {
 	// mã hóa trước khi ghi: lỗi thì vẫn kịp đổi sang 500 vì chưa gửi header nào
 	data, err := json.Marshal(v)
 	if err != nil {
 		slog.Error("writeJSON", "err", err)
 		status, data = http.StatusInternalServerError, []byte(`{"error":"lỗi máy chủ"}`)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	w.Write(append(data, '\n'))
+	c.Data(status, "application/json", append(data, '\n'))
 }
 
 // errorResponse là định dạng lỗi chung của API. Fields chỉ có ở lỗi validate:
@@ -37,20 +39,22 @@ type errorResponse struct {
 	Fields map[string]string `json:"fields,omitempty"`
 }
 
-// errorJSON trả lỗi không gắn với field nào: {"error": "..."}.
-func errorJSON(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, errorResponse{Error: message})
+// errorJSON trả lỗi không gắn với field nào: {"error": "..."}, rồi gọi c.Abort để
+// các handler còn lại trong chuỗi (VD handler sau requireAuth) không chạy nữa.
+func errorJSON(c *gin.Context, status int, message string) {
+	writeJSON(c, status, errorResponse{Error: message})
+	c.Abort()
 }
 
-// readJSON đọc body của r (một JSON object) vào dst, trả lỗi có thông báo dễ hiểu cho client.
-func readJSON(w http.ResponseWriter, r *http.Request, dst any) error {
-	mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+// readJSON đọc body của request (một JSON object) vào dst, trả lỗi có thông báo dễ hiểu cho client.
+func readJSON(c *gin.Context, dst any) error {
+	mediaType, _, _ := mime.ParseMediaType(c.GetHeader("Content-Type"))
 	if mediaType != "application/json" {
 		return errUnsupportedMediaType
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	dec := json.NewDecoder(r.Body)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBodyBytes)
+	dec := json.NewDecoder(c.Request.Body)
 	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(dst); err != nil {
@@ -85,14 +89,14 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 }
 
 // bodyError trả lỗi của readJSON với status code phù hợp: 415, 413 hoặc 400.
-func bodyError(w http.ResponseWriter, err error) {
+func bodyError(c *gin.Context, err error) {
 	var maxErr *http.MaxBytesError
 	switch {
 	case errors.Is(err, errUnsupportedMediaType):
-		errorJSON(w, http.StatusUnsupportedMediaType, err.Error())
+		errorJSON(c, http.StatusUnsupportedMediaType, err.Error())
 	case errors.As(err, &maxErr):
-		errorJSON(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("body vượt quá %d byte", maxErr.Limit))
+		errorJSON(c, http.StatusRequestEntityTooLarge, fmt.Sprintf("body vượt quá %d byte", maxErr.Limit))
 	default:
-		errorJSON(w, http.StatusBadRequest, err.Error())
+		errorJSON(c, http.StatusBadRequest, err.Error())
 	}
 }

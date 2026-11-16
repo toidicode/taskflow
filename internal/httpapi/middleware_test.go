@@ -9,7 +9,16 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/toidicode/taskflow/internal/reqlog"
 )
+
+func TestMain(m *testing.M) {
+	gin.SetMode(gin.TestMode) // không in route và cảnh báo của chế độ debug ra output của go test
+	m.Run()
+}
 
 // captureLog thay logger mặc định bằng logger JSON ghi vào buffer cho tới hết test.
 // Test dùng captureLog không được chạy song song vì logger mặc định là biến dùng chung.
@@ -37,20 +46,26 @@ func logEntries(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	return entries
 }
 
-func TestChainOrder(t *testing.T) {
+// withMiddleware tạo engine trả lời mọi method, mọi path bằng h, đi qua các middleware mws.
+func withMiddleware(h gin.HandlerFunc, mws ...gin.HandlerFunc) *gin.Engine {
+	r := newEngine(nil)
+	r.Use(mws...)
+	r.Any("/*path", h)
+	return r
+}
+
+func TestMiddlewareOrder(t *testing.T) {
 	var steps []string
-	trace := func(name string) middleware {
-		return func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				steps = append(steps, name+">")
-				next.ServeHTTP(w, r)
-				steps = append(steps, "<"+name)
-			})
+	trace := func(name string) gin.HandlerFunc {
+		return func(c *gin.Context) {
+			steps = append(steps, name+">")
+			c.Next() // chạy phần còn lại của chuỗi rồi mới quay lại đây
+			steps = append(steps, "<"+name)
 		}
 	}
-	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { steps = append(steps, "handler") })
+	h := func(c *gin.Context) { steps = append(steps, "handler") }
 
-	send(chain(h, trace("a"), trace("b")), "GET", "/", "")
+	send(withMiddleware(h, trace("a"), trace("b")), "GET", "/", "")
 
 	if got, want := strings.Join(steps, " "), "a> b> handler <b <a"; got != want {
 		t.Errorf("thứ tự = %q, muốn %q", got, want)
@@ -59,9 +74,9 @@ func TestChainOrder(t *testing.T) {
 
 func TestRequestID(t *testing.T) {
 	var fromCtx string
-	h := requestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fromCtx = requestIDFrom(r.Context())
-	}))
+	h := withMiddleware(func(c *gin.Context) {
+		fromCtx = reqlog.ID(c.Request.Context()) // service đọc được cùng ID
+	}, requestID)
 
 	tests := []struct {
 		name   string
@@ -94,10 +109,6 @@ func TestRequestID(t *testing.T) {
 			}
 		})
 	}
-
-	if got := requestIDFrom(httptest.NewRequest("GET", "/", nil).Context()); got != "-" {
-		t.Errorf("không có ID: %q, muốn \"-\"", got)
-	}
 }
 
 func TestLogRequests(t *testing.T) {
@@ -105,30 +116,30 @@ func TestLogRequests(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		handler   http.HandlerFunc
+		handler   gin.HandlerFunc
 		wantLevel string
 		status    float64 // số trong JSON giải mã vào any thành float64
 		size      float64
 	}{
-		{"WriteHeader rồi Write", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusCreated)
-			fmt.Fprint(w, "hello")
+		{"WriteHeader rồi Write", func(c *gin.Context) {
+			c.Writer.WriteHeader(http.StatusCreated)
+			fmt.Fprint(c.Writer, "hello")
 		}, "INFO", 201, 5},
-		{"chỉ Write", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprint(w, "ok")
+		{"chỉ Write", func(c *gin.Context) {
+			fmt.Fprint(c.Writer, "ok")
 		}, "INFO", 200, 2},
-		{"không ghi gì", func(w http.ResponseWriter, r *http.Request) {}, "INFO", 200, 0},
-		{"lỗi 404", func(w http.ResponseWriter, r *http.Request) {
-			errorJSON(w, http.StatusNotFound, "x")
+		{"không ghi gì", func(c *gin.Context) {}, "INFO", 200, 0},
+		{"lỗi 404", func(c *gin.Context) {
+			errorJSON(c, http.StatusNotFound, "x")
 		}, "WARN", 404, 14},
-		{"lỗi 500", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
+		{"lỗi 500", func(c *gin.Context) {
+			c.Status(http.StatusInternalServerError)
 		}, "ERROR", 500, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logs.Reset()
-			send(logRequests(tt.handler), "POST", "/x?a=1", "")
+			send(withMiddleware(tt.handler, logRequests), "POST", "/x?a=1", "")
 
 			entries := logEntries(t, logs)
 			if len(entries) != 1 {
@@ -150,27 +161,29 @@ func TestLogRequests(t *testing.T) {
 	}
 }
 
-func TestStatusRecorderUnwrap(t *testing.T) {
+// TestResponseControllerUnwrap: http.ResponseController tìm được ResponseWriter thật qua c.Writer
+// của Gin, nên extendDeadlines (Bài 35) và Flush vẫn dùng được trong handler Gin.
+func TestResponseControllerUnwrap(t *testing.T) {
 	captureLog(t)
 	var flushErr error
-	h := logRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "dữ liệu đầu tiên")
-		flushErr = http.NewResponseController(w).Flush() // w là *statusRecorder
-	}))
+	h := withMiddleware(func(c *gin.Context) {
+		fmt.Fprint(c.Writer, "dữ liệu đầu tiên")
+		flushErr = http.NewResponseController(c.Writer).Flush()
+	}, logRequests)
 
 	rec := send(h, "GET", "/", "")
 	if flushErr != nil || !rec.Flushed {
-		t.Errorf("Flush qua statusRecorder: err = %v, Flushed = %v", flushErr, rec.Flushed)
+		t.Errorf("Flush qua c.Writer: err = %v, Flushed = %v", flushErr, rec.Flushed)
 	}
 }
 
 func TestRecoverPanic(t *testing.T) {
 	logs := captureLog(t)
-	boom := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	boom := func(c *gin.Context) {
 		panic("toang")
-	})
+	}
 
-	rec := send(chain(boom, requestID, logRequests, recoverPanic), "GET", "/boom", "")
+	rec := send(withMiddleware(boom, requestID, logRequests, recoverPanic), "GET", "/boom", "")
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, muốn 500", rec.Code)
@@ -199,9 +212,9 @@ func TestRecoverPanic(t *testing.T) {
 }
 
 func TestRecoverPanicAbortHandler(t *testing.T) {
-	h := recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := withMiddleware(func(c *gin.Context) {
 		panic(http.ErrAbortHandler)
-	}))
+	}, recoverPanic)
 	defer func() {
 		if err := recover(); err != http.ErrAbortHandler {
 			t.Errorf("recover() = %v, muốn http.ErrAbortHandler được panic tiếp", err)
@@ -213,9 +226,9 @@ func TestRecoverPanicAbortHandler(t *testing.T) {
 func TestCORS(t *testing.T) {
 	const origin = "http://localhost:5173"
 	called := false
-	h := cors(origin)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := withMiddleware(func(c *gin.Context) {
 		called = true
-	}))
+	}, cors(origin))
 
 	tests := []struct {
 		name       string
@@ -271,7 +284,8 @@ func TestNewAPI(t *testing.T) {
 		t.Errorf("log = %v, muốn một dòng có request_id %q", entries, id)
 	}
 
-	// mux trả 405 cho OPTIONS, nhưng preflight đã được cors trả lời trước khi tới mux
+	// không có route OPTIONS, nhưng preflight đã được cors trả lời (middleware dùng chung
+	// của Gin chạy cả với request không khớp route nào)
 	req := httptest.NewRequest("OPTIONS", "/api/v1/tasks/2", nil)
 	req.Header.Set("Origin", "http://localhost:5173")
 	req.Header.Set("Access-Control-Request-Method", "PATCH")
@@ -283,5 +297,18 @@ func TestNewAPI(t *testing.T) {
 	// trình duyệt chỉ gửi header Authorization khi preflight cho phép
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Authorization") {
 		t.Errorf("Allow-Headers = %q, thiếu Authorization", got)
+	}
+
+	// route không có và sai method cũng đi qua middleware: có X-Request-ID và được ghi log
+	for _, tt := range []struct {
+		method, target string
+		want           int
+	}{{"GET", "/api/v1/khong-co", 404}, {"PUT", "/api/v1/tasks", 405}} {
+		logs.Reset()
+		rec := send(api, tt.method, tt.target, "")
+		e := logEntries(t, logs)
+		if rec.Code != tt.want || rec.Header().Get("X-Request-ID") == "" || len(e) != 1 || e[0]["status"] != float64(tt.want) {
+			t.Errorf("%s %s: %d, X-Request-ID %q, log %v", tt.method, tt.target, rec.Code, rec.Header().Get("X-Request-ID"), e)
+		}
 	}
 }

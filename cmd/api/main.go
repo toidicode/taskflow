@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/httpapi"
 	"github.com/toidicode/taskflow/internal/jobs"
@@ -50,6 +52,11 @@ func main() {
 		return
 	}
 
+	// Gin mặc định ở chế độ debug: in từng route và cảnh báo ra stdout lúc khởi động.
+	// TaskFlow chạy chế độ release, trừ khi đặt GIN_MODE (VD GIN_MODE=debug để xem route).
+	if _, ok := os.LookupEnv(gin.EnvGinMode); !ok {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	if err := run(cfg); err != nil {
 		slog.Error("server dừng vì lỗi", "err", err)
 		os.Exit(1)

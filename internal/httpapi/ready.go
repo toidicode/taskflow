@@ -7,9 +7,12 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"github.com/toidicode/taskflow/internal/reqlog"
 )
 
-// Readiness trả lời /ready: server có nên nhận request mới không.
+// Readiness trả lời /ready: server có nên nhận request mới không. Đây là một http.Handler
+// bình thường, routes gắn nó vào Gin bằng gin.WrapH.
 type Readiness struct {
 	db       *sql.DB     // nil khi dùng store trong bộ nhớ
 	stopping atomic.Bool // true từ lúc bắt đầu tắt server
@@ -26,7 +29,7 @@ func (rd *Readiness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 		defer cancel()
 		if err := rd.db.PingContext(ctx); err != nil {
-			requestLogger(r).Warn("ready: database không phản hồi", "err", err)
+			reqlog.Logger(r.Context()).Warn("ready: database không phản hồi", "err", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprintln(w, "database không phản hồi")
 			return

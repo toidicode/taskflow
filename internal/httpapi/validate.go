@@ -3,6 +3,13 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"reflect"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
+	playground "github.com/go-playground/validator/v10"
+	"github.com/go-playground/validator/v10/non-standard/validators"
 
 	"github.com/toidicode/taskflow/internal/task"
 )
@@ -34,33 +41,83 @@ func (v validator) addError(err error) error {
 	return err
 }
 
-// validatable là body request tự kiểm tra được dữ liệu của mình.
+func init() {
+	// binding.Validator là validator của Gin (go-playground/validator, đọc tag binding:"...").
+	// Cấu hình một lần: lỗi mang tên key trong tag json, thêm rule notblank (không rỗng sau khi bỏ khoảng trắng).
+	v := binding.Validator.Engine().(*playground.Validate)
+	v.RegisterTagNameFunc(func(f reflect.StructField) string {
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "-" {
+			return ""
+		}
+		return name
+	})
+	if err := v.RegisterValidation("notblank", validators.NotBlank); err != nil {
+		panic(err)
+	}
+}
+
+// addBindingErrors chép lỗi của tag binding vào v, dịch theo tên rule (Bài 27).
+// Lỗi khác ValidationErrors (tag viết sai, dst không phải struct) được trả lại.
+func (v validator) addBindingErrors(err error) error {
+	verrs, ok := errors.AsType[playground.ValidationErrors](err)
+	if !ok {
+		return err
+	}
+	for _, fe := range verrs {
+		v.check(false, fe.Field(), bindingMessage(fe))
+	}
+	return nil
+}
+
+// bindingMessage dịch một lỗi theo rule (fe.Tag) và tham số của rule (fe.Param).
+func bindingMessage(fe playground.FieldError) string {
+	switch fe.Tag() {
+	case "required", "notblank":
+		return "không được để trống"
+	case "max":
+		return "tối đa " + fe.Param() + " ký tự"
+	case "min":
+		return "tối thiểu " + fe.Param() + " ký tự"
+	}
+	return "không hợp lệ (" + fe.Tag() + ")"
+}
+
+// validatable là body request tự kiểm tra thêm những gì tag binding không diễn đạt được.
 type validatable interface {
 	validate(v validator)
 }
 
-// decodeValid đọc body JSON vào dst rồi gọi dst.validate. Body hỏng trả 400/413/415,
-// dữ liệu sai trả 422. Trả về false khi đã ghi response lỗi, handler chỉ cần return.
-func decodeValid(w http.ResponseWriter, r *http.Request, dst validatable) bool {
-	if err := readJSON(w, r, dst); err != nil {
-		bodyError(w, err)
+// bindJSON đọc body vào dst, validate theo tag binding rồi method validate (nếu có).
+// Body hỏng: 400/413/415, dữ liệu sai: 422. Trả về false khi đã ghi response lỗi.
+func bindJSON(c *gin.Context, dst any) bool {
+	if err := readJSON(c, dst); err != nil {
+		bodyError(c, err)
 		return false
 	}
 	v := validator{}
-	dst.validate(v)
+	if err := v.addBindingErrors(binding.Validator.ValidateStruct(dst)); err != nil {
+		writeError(c, err)
+		return false
+	}
+	if dv, ok := dst.(validatable); ok {
+		dv.validate(v)
+	}
 	if len(v) > 0 {
-		invalidJSON(w, v)
+		invalidJSON(c, v)
 		return false
 	}
 	return true
 }
 
 // invalidJSON trả 422 kèm lỗi của từng field trong body.
-func invalidJSON(w http.ResponseWriter, v validator) {
-	writeJSON(w, http.StatusUnprocessableEntity, errorResponse{Error: "dữ liệu không hợp lệ", Fields: v})
+func invalidJSON(c *gin.Context, v validator) {
+	writeJSON(c, http.StatusUnprocessableEntity, errorResponse{Error: "dữ liệu không hợp lệ", Fields: v})
+	c.Abort()
 }
 
 // badParamsJSON trả 400 kèm lỗi của từng tham số trên URL (path hoặc query).
-func badParamsJSON(w http.ResponseWriter, v validator) {
-	writeJSON(w, http.StatusBadRequest, errorResponse{Error: "tham số không hợp lệ", Fields: v})
+func badParamsJSON(c *gin.Context, v validator) {
+	writeJSON(c, http.StatusBadRequest, errorResponse{Error: "tham số không hợp lệ", Fields: v})
+	c.Abort()
 }

@@ -12,6 +12,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/storage"
@@ -37,40 +39,41 @@ var allowedTypes = map[string]bool{
 // errNoFile: body không có part nào tên "file" kèm tên file.
 var errNoFile = errors.New(`cần một file trong field "file"`)
 
-// uploadAttachment nhận một file (multipart/form-data, field "file") và đính kèm vào task {id}.
-// Body được đọc dạng stream, file được ghi thẳng vào storage, không giữ cả file trong bộ nhớ.
-func uploadAttachment(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+// uploadAttachment nhận một file (multipart/form-data, field "file") và đính kèm vào task :id.
+// Body được đọc dạng stream, file được ghi thẳng vào storage, không giữ cả file trong bộ nhớ:
+// không dùng c.FormFile của Gin (nó gọi ParseMultipartForm, file lớn bị ghi ra file tạm trước).
+func uploadAttachment(d Deps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
 		// kiểm tra quyền trước khi đọc body: người ngoài không đẩy được 10 MB nào vào server
-		me := userIDFrom(r.Context())
-		t, p, err := d.Tasks.Get(r.Context(), me, id)
+		me := userIDFrom(c)
+		t, p, err := d.Tasks.Get(c.Request.Context(), me, id)
 		if err != nil {
-			writeError(w, r, err)
+			writeError(c, err)
 			return
 		}
 		if !attachment.CanUpload(me, p, t) {
-			forbidden(w, "không được đính kèm file vào task này")
+			forbidden(c, "không được đính kèm file vào task này")
 			return
 		}
-		if r.ContentLength > maxUploadBody { // client báo trước kích thước: từ chối khi chưa đọc byte nào
-			tooLarge(w)
+		if c.Request.ContentLength > maxUploadBody { // client báo trước kích thước: từ chối khi chưa đọc byte nào
+			tooLarge(c)
 			return
 		}
-		extendDeadlines(w, r)
-		r.Body = http.MaxBytesReader(w, r.Body, maxUploadBody)
+		extendDeadlines(c)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadBody)
 
-		mr, err := r.MultipartReader()
+		mr, err := c.Request.MultipartReader() // c.Request vẫn là *http.Request: đọc stream như Bài 35
 		if err != nil {
-			errorJSON(w, http.StatusUnsupportedMediaType, "Content-Type phải là multipart/form-data")
+			errorJSON(c, http.StatusUnsupportedMediaType, "Content-Type phải là multipart/form-data")
 			return
 		}
 		part, err := filePart(mr)
 		if err != nil {
-			badUpload(w, r, err)
+			badUpload(c, err)
 			return
 		}
 
@@ -78,17 +81,17 @@ func uploadAttachment(d Deps) http.HandlerFunc {
 		head := make([]byte, 512)
 		n, err := io.ReadFull(part, head)
 		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-			badUpload(w, r, err)
+			badUpload(c, err)
 			return
 		}
 		head = head[:n]
 		if n == 0 {
-			invalidJSON(w, validator{"file": "file rỗng"})
+			invalidJSON(c, validator{"file": "file rỗng"})
 			return
 		}
 		contentType := http.DetectContentType(head)
 		if !allowedTypes[contentType] {
-			invalidJSON(w, validator{"file": fmt.Sprintf("không nhận file %s, chỉ nhận ảnh PNG, JPEG, GIF, WebP, PDF và text", contentType)})
+			invalidJSON(c, validator{"file": fmt.Sprintf("không nhận file %s, chỉ nhận ảnh PNG, JPEG, GIF, WebP, PDF và text", contentType)})
 			return
 		}
 
@@ -100,27 +103,27 @@ func uploadAttachment(d Deps) http.HandlerFunc {
 			UploadedBy:  me,
 		}
 		content := io.MultiReader(bytes.NewReader(head), part) // ghép lại 512 byte đã đọc với phần còn lại
-		a.Size, err = d.Files.Save(r.Context(), a.StoredName, readErrors{io.LimitReader(content, maxUploadBytes+1)})
+		a.Size, err = d.Files.Save(c.Request.Context(), a.StoredName, readErrors{io.LimitReader(content, maxUploadBytes+1)})
 		if err == nil && a.Size > maxUploadBytes {
-			removeFiles(r, d.Files, *a)
+			removeFiles(c, d.Files, *a)
 			err = readError{&http.MaxBytesError{Limit: maxUploadBytes}}
 		}
 		if _, ok := errors.AsType[readError](err); ok {
-			badUpload(w, r, err)
+			badUpload(c, err)
 			return
 		}
 		if err != nil {
-			writeError(w, r, err)
+			writeError(c, err)
 			return
 		}
 
-		if err := d.Attachments.Add(r.Context(), a); err != nil {
-			removeFiles(r, d.Files, *a) // không để lại file mà không hàng nào trỏ tới
-			writeError(w, r, err)       // task vừa bị xóa: 404
+		if err := d.Attachments.Add(c.Request.Context(), a); err != nil {
+			removeFiles(c, d.Files, *a) // không để lại file mà không hàng nào trỏ tới
+			writeError(c, err)          // task vừa bị xóa: 404
 			return
 		}
-		w.Header().Set("Location", fmt.Sprintf("/api/v1/attachments/%d", a.ID))
-		writeJSON(w, http.StatusCreated, a)
+		c.Header("Location", fmt.Sprintf("/api/v1/attachments/%d", a.ID))
+		writeJSON(c, http.StatusCreated, a)
 	}
 }
 
@@ -160,81 +163,81 @@ func (rr readErrors) Read(p []byte) (int, error) {
 
 // badUpload trả lỗi khi đọc body upload: 422 khi thiếu file, 413 khi vượt giới hạn,
 // 408 khi client gửi quá chậm, còn lại 400. Chi tiết lỗi chỉ ghi vào log.
-func badUpload(w http.ResponseWriter, r *http.Request, err error) {
+func badUpload(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, errNoFile):
-		invalidJSON(w, validator{"file": err.Error()})
+		invalidJSON(c, validator{"file": err.Error()})
 	case errors.As(err, new(*http.MaxBytesError)):
-		tooLarge(w)
+		tooLarge(c)
 	case errors.Is(err, os.ErrDeadlineExceeded):
-		errorJSON(w, http.StatusRequestTimeout, "gửi file quá lâu")
+		errorJSON(c, http.StatusRequestTimeout, "gửi file quá lâu")
 	default:
-		requestLogger(r).Warn("body upload hỏng", "err", err)
-		errorJSON(w, http.StatusBadRequest, "body multipart không hợp lệ")
+		requestLogger(c).Warn("body upload hỏng", "err", err)
+		errorJSON(c, http.StatusBadRequest, "body multipart không hợp lệ")
 	}
 }
 
 // tooLarge trả 413 khi file vượt quá maxUploadBytes.
-func tooLarge(w http.ResponseWriter) {
-	errorJSON(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file tối đa %d MB", maxUploadBytes>>20))
+func tooLarge(c *gin.Context) {
+	errorJSON(c, http.StatusRequestEntityTooLarge, fmt.Sprintf("file tối đa %d MB", maxUploadBytes>>20))
 }
 
 // extendDeadlines cho request này transferTimeout để nhận body và gửi response, thay cho
 // ReadTimeout, WriteTimeout chung của server (10 giây, không đủ cho file lớn qua mạng chậm).
-func extendDeadlines(w http.ResponseWriter, r *http.Request) {
-	rc := http.NewResponseController(w) // tìm tới kết nối thật qua Unwrap của các middleware
+func extendDeadlines(c *gin.Context) {
+	rc := http.NewResponseController(c.Writer) // tìm tới kết nối thật qua Unwrap() của c.Writer
 	deadline := time.Now().Add(transferTimeout)
 	for _, err := range []error{rc.SetReadDeadline(deadline), rc.SetWriteDeadline(deadline)} {
 		if err != nil && !errors.Is(err, http.ErrNotSupported) { // httptest.ResponseRecorder không hỗ trợ
-			requestLogger(r).Warn("không đặt được deadline", "err", err)
+			requestLogger(c).Warn("không đặt được deadline", "err", err)
 		}
 	}
 }
 
-// listAttachments trả về các file đính kèm của task {id}.
-func listAttachments(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+// listAttachments trả về các file đính kèm của task :id.
+func listAttachments(d Deps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
-		if _, _, err := d.Tasks.Get(r.Context(), userIDFrom(r.Context()), id); err != nil {
-			writeError(w, r, err)
+		if _, _, err := d.Tasks.Get(c.Request.Context(), userIDFrom(c), id); err != nil {
+			writeError(c, err)
 			return
 		}
-		list, err := d.Attachments.List(r.Context(), id)
+		list, err := d.Attachments.List(c.Request.Context(), id)
 		if err != nil {
-			writeError(w, r, err)
+			writeError(c, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, list)
+		writeJSON(c, http.StatusOK, list)
 	}
 }
 
-// downloadAttachment gửi nội dung file {id} cho người xem được task chứa nó.
-func downloadAttachment(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+// downloadAttachment gửi nội dung file :id cho người xem được task chứa nó.
+func downloadAttachment(d Deps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
-		a, _, _, ok := loadAttachment(w, r, d, id)
+		a, _, _, ok := loadAttachment(c, d, id)
 		if !ok {
 			return
 		}
-		f, err := d.Files.Open(r.Context(), a.StoredName)
+		f, err := d.Files.Open(c.Request.Context(), a.StoredName)
 		if err != nil { // có hàng mà không có file: lỗi của server
-			writeError(w, r, fmt.Errorf("mở file của attachment #%d: %w", id, err))
+			writeError(c, fmt.Errorf("mở file của attachment #%d: %w", id, err))
 			return
 		}
 		defer f.Close()
-		extendDeadlines(w, r)
+		extendDeadlines(c)
 
-		h := w.Header()
+		h := c.Writer.Header()
 		h.Set("Content-Type", a.ContentType)                     // loại đã kiểm tra lúc upload
 		h.Set("X-Content-Type-Options", "nosniff")               // trình duyệt không tự đoán ra loại khác
 		h.Set("Content-Disposition", contentDisposition(a.Name)) // tải về, không mở ngay trong trình duyệt
-		http.ServeContent(w, r, "", a.CreatedAt, f)
+		http.ServeContent(c.Writer, c.Request, "", a.CreatedAt, f)
 	}
 }
 
@@ -247,55 +250,55 @@ func contentDisposition(name string) string {
 	return "attachment"
 }
 
-// deleteAttachment xóa file {id}: chủ project xóa được mọi file, người khác chỉ xóa file mình upload.
-func deleteAttachment(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+// deleteAttachment xóa file :id: chủ project xóa được mọi file, người khác chỉ xóa file mình upload.
+func deleteAttachment(d Deps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
-		a, t, p, ok := loadAttachment(w, r, d, id)
+		a, t, p, ok := loadAttachment(c, d, id)
 		if !ok {
 			return
 		}
-		if !attachment.CanDelete(userIDFrom(r.Context()), p, t, a) {
-			forbidden(w, "chỉ chủ project hoặc người upload được xóa file")
+		if !attachment.CanDelete(userIDFrom(c), p, t, a) {
+			forbidden(c, "chỉ chủ project hoặc người upload được xóa file")
 			return
 		}
 		// xóa hàng trước, file sau: bước sau lỗi thì chỉ thừa một file không ai thấy;
 		// làm ngược lại thì lỗi để lại một hàng trỏ tới file không còn
-		if err := d.Attachments.Delete(r.Context(), id); err != nil {
-			writeError(w, r, err)
+		if err := d.Attachments.Delete(c.Request.Context(), id); err != nil {
+			writeError(c, err)
 			return
 		}
-		removeFiles(r, d.Files, a)
-		w.WriteHeader(http.StatusNoContent)
+		removeFiles(c, d.Files, a)
+		c.Status(http.StatusNoContent)
 	}
 }
 
 // removeFiles xóa nội dung các file đính kèm khỏi storage, lỗi chỉ được ghi log (attachment.Files.Remove).
-func removeFiles(r *http.Request, files storage.Storage, list ...attachment.Attachment) {
+func removeFiles(c *gin.Context, files storage.Storage, list ...attachment.Attachment) {
 	names := make([]string, len(list))
 	for i, a := range list {
 		names[i] = a.StoredName
 	}
-	attachment.Files{Storage: files}.Remove(r.Context(), names...)
+	attachment.Files{Storage: files}.Remove(c.Request.Context(), names...)
 }
 
 // loadAttachment đọc file đính kèm id cùng task và project chứa nó. User không được xem task
 // thì ghi response 404 giống hệt khi không có file (không lộ cả ID của task) rồi trả về false.
-func loadAttachment(w http.ResponseWriter, r *http.Request, d Deps, id int) (attachment.Attachment, task.Task, project.Project, bool) {
-	a, err := d.Attachments.Get(r.Context(), id)
+func loadAttachment(c *gin.Context, d Deps, id int) (attachment.Attachment, task.Task, project.Project, bool) {
+	a, err := d.Attachments.Get(c.Request.Context(), id)
 	if err != nil {
-		writeError(w, r, err)
+		writeError(c, err)
 		return attachment.Attachment{}, task.Task{}, project.Project{}, false
 	}
-	t, p, err := d.Tasks.Get(r.Context(), userIDFrom(r.Context()), a.TaskID)
+	t, p, err := d.Tasks.Get(c.Request.Context(), userIDFrom(c), a.TaskID)
 	if errors.Is(err, task.ErrNotFound) {
 		err = fmt.Errorf("attachment #%d: %w", id, attachment.ErrNotFound)
 	}
 	if err != nil {
-		writeError(w, r, err)
+		writeError(c, err)
 		return attachment.Attachment{}, task.Task{}, project.Project{}, false
 	}
 	return a, t, p, true

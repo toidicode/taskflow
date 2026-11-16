@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
@@ -20,28 +22,28 @@ import (
 //   - user của token không còn: 401.
 //
 // Lỗi khác (VD mất kết nối database) được ghi log kèm request ID rồi trả 500, client không thấy chi tiết lỗi.
-func writeError(w http.ResponseWriter, r *http.Request, err error) {
+func writeError(c *gin.Context, err error) {
 	if v := (validator{}); v.addError(err) == nil && len(v) > 0 {
-		invalidJSON(w, v)
+		invalidJSON(c, v)
 		return
 	}
 	var forbidden *task.ForbiddenError
 	switch {
 	case errors.Is(err, task.ErrNotFound) || errors.Is(err, project.ErrNotFound) || errors.Is(err, attachment.ErrNotFound):
-		errorJSON(w, http.StatusNotFound, err.Error())
+		errorJSON(c, http.StatusNotFound, err.Error())
 	case errors.As(err, &forbidden):
-		errorJSON(w, http.StatusForbidden, forbidden.Reason)
+		errorJSON(c, http.StatusForbidden, forbidden.Reason)
 	case errors.Is(err, project.ErrHasTasks):
-		errorJSON(w, http.StatusConflict, err.Error())
+		errorJSON(c, http.StatusConflict, err.Error())
 	case errors.Is(err, user.ErrNotFound): // khóa ngoại owner_id, /me: token còn hạn nhưng user đã bị xóa
-		unauthorized(w, true, "tài khoản không còn tồn tại")
+		unauthorized(c, true, "tài khoản không còn tồn tại")
 	default:
-		requestLogger(r).Error("store", "err", err)
-		errorJSON(w, http.StatusInternalServerError, "lỗi máy chủ")
+		requestLogger(c).Error("store", "err", err)
+		errorJSON(c, http.StatusInternalServerError, "lỗi máy chủ")
 	}
 }
 
 // forbidden trả 403: user thấy tài nguyên nhưng không được làm việc này.
-func forbidden(w http.ResponseWriter, message string) {
-	errorJSON(w, http.StatusForbidden, message)
+func forbidden(c *gin.Context, message string) {
+	errorJSON(c, http.StatusForbidden, message)
 }

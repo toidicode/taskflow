@@ -1,60 +1,58 @@
 package httpapi
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/mail"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/user"
 )
 
-// registerInput là body của POST /auth/register.
+// registerInput là body của POST /auth/register. Rule đơn giản viết bằng tag binding,
+// phần còn lại trong method validate.
 type registerInput struct {
 	Email    string `json:"email"`
-	Name     string `json:"name"`
-	Password string `json:"password"`
+	Name     string `json:"name" binding:"notblank,max=100"`
+	Password string `json:"password" binding:"min=8"` // min, max của string đếm ký tự (rune)
 }
 
-// validate kiểm tra body đăng ký, cài interface validatable.
+// validate kiểm tra những gì tag không diễn đạt được, cài interface validatable:
+// email phải là một địa chỉ trần sau khi chuẩn hóa, mật khẩu tính theo byte.
 func (in *registerInput) validate(v validator) {
 	email := user.NormalizeEmail(in.Email)
 	addr, err := mail.ParseAddress(email)
 	v.check(err == nil && addr.Address == email && len(email) <= 254, "email", "email không hợp lệ")
-	name := strings.TrimSpace(in.Name)
-	v.check(name != "", "name", "không được để trống")
-	v.check(utf8.RuneCountInString(name) <= 100, "name", "tối đa 100 ký tự")
-	v.check(utf8.RuneCountInString(in.Password) >= 8, "password", "tối thiểu 8 ký tự")
 	v.check(len(in.Password) <= auth.MaxPasswordBytes, "password", // len đếm byte, chữ có dấu chiếm 2-3 byte
 		fmt.Sprintf("tối đa %d byte", auth.MaxPasswordBytes))
 }
 
 // register tạo tài khoản mới, trả 201 kèm thông tin user (không có mật khẩu).
-func register(users user.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func register(users user.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var in registerInput
-		if !decodeValid(w, r, &in) {
+		if !bindJSON(c, &in) {
 			return
 		}
 		hash, err := auth.HashPassword(in.Password)
 		if err != nil {
-			writeError(w, r, err)
+			writeError(c, err)
 			return
 		}
 		u := &user.User{Email: user.NormalizeEmail(in.Email), Name: strings.TrimSpace(in.Name), PasswordHash: hash}
-		if err := users.Add(r.Context(), u); errors.Is(err, user.ErrEmailTaken) {
-			errorJSON(w, http.StatusConflict, user.ErrEmailTaken.Error())
+		if err := users.Add(c.Request.Context(), u); errors.Is(err, user.ErrEmailTaken) {
+			errorJSON(c, http.StatusConflict, user.ErrEmailTaken.Error())
 			return
 		} else if err != nil {
-			writeError(w, r, err)
+			writeError(c, err)
 			return
 		}
-		w.Header().Set("Location", "/api/v1/me")
-		writeJSON(w, http.StatusCreated, u)
+		c.Header("Location", "/api/v1/me")
+		writeJSON(c, http.StatusCreated, u)
 	}
 }
 
@@ -73,29 +71,29 @@ type tokenResponse struct {
 
 // login kiểm tra email, mật khẩu rồi phát access token.
 // Sai email hay sai mật khẩu đều nhận cùng một lỗi 401.
-func login(users user.Store, tokens *auth.Tokens) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func login(users user.Store, tokens *auth.Tokens) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var in loginInput
-		if err := readJSON(w, r, &in); err != nil {
-			bodyError(w, err)
+		if err := readJSON(c, &in); err != nil {
+			bodyError(c, err)
 			return
 		}
-		u, err := users.GetByEmail(r.Context(), user.NormalizeEmail(in.Email))
+		u, err := users.GetByEmail(c.Request.Context(), user.NormalizeEmail(in.Email))
 		if err != nil && !errors.Is(err, user.ErrNotFound) {
-			writeError(w, r, err)
+			writeError(c, err)
 			return
 		}
 		// không có user thì u.PasswordHash rỗng: CheckPassword vẫn chạy bcrypt rồi trả false
 		if !auth.CheckPassword(u.PasswordHash, in.Password) {
-			unauthorized(w, false, "email hoặc mật khẩu không đúng")
+			unauthorized(c, false, "email hoặc mật khẩu không đúng")
 			return
 		}
 		token, err := tokens.Issue(u.ID)
 		if err != nil {
-			writeError(w, r, err)
+			writeError(c, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, tokenResponse{
+		writeJSON(c, http.StatusOK, tokenResponse{
 			AccessToken: token,
 			TokenType:   "Bearer",
 			ExpiresIn:   int(tokens.TTL().Seconds()),
@@ -104,40 +102,39 @@ func login(users user.Store, tokens *auth.Tokens) http.HandlerFunc {
 }
 
 // me trả về user đang đăng nhập.
-func me(users user.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		u, err := users.Get(r.Context(), userIDFrom(r.Context()))
+func me(users user.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		u, err := users.Get(c.Request.Context(), userIDFrom(c))
 		if errors.Is(err, user.ErrNotFound) { // token còn hạn nhưng user đã bị xóa
-			unauthorized(w, true, "tài khoản không còn tồn tại")
+			unauthorized(c, true, "tài khoản không còn tồn tại")
 			return
 		}
 		if err != nil {
-			writeError(w, r, err)
+			writeError(c, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, u)
+		writeJSON(c, http.StatusOK, u)
 	}
 }
 
-// requireAuth chỉ cho request có access token hợp lệ đi tiếp và gắn user ID vào context.
-func requireAuth(tokens *auth.Tokens) middleware {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token, ok := bearerToken(r)
-			if !ok {
-				unauthorized(w, false, "cần đăng nhập: thiếu access token")
-				return
-			}
-			id, err := tokens.Verify(token)
-			if err != nil {
-				// ghi lý do để debug, không bao giờ ghi bản thân token
-				requestLogger(r).Debug("token bị từ chối", "err", err)
-				unauthorized(w, true, "token không hợp lệ hoặc đã hết hạn")
-				return
-			}
-			ctx := context.WithValue(r.Context(), userIDKey, id)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
+// requireAuth chỉ cho request có access token hợp lệ đi tiếp và gắn user ID vào gin.Context.
+// Token sai thì unauthorized ghi 401 và gọi c.Abort: handler của route không chạy.
+func requireAuth(tokens *auth.Tokens) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token, ok := bearerToken(c.Request)
+		if !ok {
+			unauthorized(c, false, "cần đăng nhập: thiếu access token")
+			return
+		}
+		id, err := tokens.Verify(token)
+		if err != nil {
+			// ghi lý do để debug, không bao giờ ghi bản thân token
+			requestLogger(c).Debug("token bị từ chối", "err", err)
+			unauthorized(c, true, "token không hợp lệ hoặc đã hết hạn")
+			return
+		}
+		c.Set(userIDKey, id)
+		c.Next()
 	}
 }
 
@@ -152,18 +149,17 @@ func bearerToken(r *http.Request) (string, bool) {
 }
 
 // userIDFrom trả về ID của user đã đăng nhập, 0 khi request không đi qua requireAuth.
-func userIDFrom(ctx context.Context) int {
-	id, _ := ctx.Value(userIDKey).(int)
-	return id
+func userIDFrom(c *gin.Context) int {
+	return c.GetInt(userIDKey)
 }
 
 // unauthorized trả 401 kèm header WWW-Authenticate mà 401 bắt buộc phải có.
 // invalidToken là true khi client có gửi token nhưng token không dùng được (RFC 6750).
-func unauthorized(w http.ResponseWriter, invalidToken bool, message string) {
+func unauthorized(c *gin.Context, invalidToken bool, message string) {
 	challenge := `Bearer realm="taskflow"`
 	if invalidToken {
 		challenge += `, error="invalid_token"`
 	}
-	w.Header().Set("WWW-Authenticate", challenge)
-	errorJSON(w, http.StatusUnauthorized, message)
+	c.Header("WWW-Authenticate", challenge)
+	errorJSON(c, http.StatusUnauthorized, message)
 }

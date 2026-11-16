@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/toidicode/taskflow/internal/task"
 )
 
@@ -18,7 +20,7 @@ type createTaskInput struct {
 	Tags        []string  `json:"tags"`
 }
 
-// updateTaskInput là body của PATCH /tasks/{id}: field nào nil là client không gửi, giữ nguyên.
+// updateTaskInput là body của PATCH /tasks/:id: field nào nil là client không gửi, giữ nguyên.
 type updateTaskInput struct {
 	Title       *string      `json:"title"`
 	Description *string      `json:"description"`
@@ -46,23 +48,23 @@ func (o *optionalTime) UnmarshalJSON(data []byte) error {
 }
 
 // listTasks liệt kê task theo trang, lọc được theo ?status=todo|doing|done và ?tag=.
-func listTasks(tasks *task.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeTasks(w, r, tasks, 0)
+func listTasks(tasks *task.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		writeTasks(c, tasks, 0)
 	}
 }
 
 // writeTasks trả về một trang các task mà user đang đăng nhập được xem, khớp ?status=, ?tag=
 // (và thuộc projectID nếu projectID khác 0), phân trang bằng ?limit= và ?cursor=.
-func writeTasks(w http.ResponseWriter, r *http.Request, tasks *task.Service, projectID int) {
-	me := userIDFrom(r.Context())
-	if me == 0 { // route quên bọc requireAuth: Filter.VisibleTo = 0 sẽ trả về task của mọi người
-		unauthorized(w, false, "cần đăng nhập: thiếu access token")
+func writeTasks(c *gin.Context, tasks *task.Service, projectID int) {
+	me := userIDFrom(c)
+	if me == 0 { // route quên requireAuth: Filter.VisibleTo = 0 sẽ trả về task của mọi người
+		unauthorized(c, false, "cần đăng nhập: thiếu access token")
 		return
 	}
-	query, v := r.URL.Query(), validator{}
-	f := task.Filter{ProjectID: projectID, Tag: task.NormalizeTag(query.Get("tag"))}
-	if s := query.Get("status"); s != "" {
+	v := validator{}
+	f := task.Filter{ProjectID: projectID, Tag: task.NormalizeTag(c.Query("tag"))}
+	if s := c.Query("status"); s != "" {
 		status, err := task.ParseStatus(s)
 		if err != nil {
 			v.check(false, "status", err.Error())
@@ -70,16 +72,16 @@ func writeTasks(w http.ResponseWriter, r *http.Request, tasks *task.Service, pro
 			f.Status = &status
 		}
 	}
-	limit, afterID := parsePage(query, v)
+	limit, afterID := parsePage(c, v)
 	if len(v) > 0 {
-		badParamsJSON(w, v)
+		badParamsJSON(c, v)
 		return
 	}
 	f.AfterID, f.Limit = afterID, limit+1 // lấy thừa một task để biết còn trang sau không
 
-	list, err := tasks.List(r.Context(), me, f)
+	list, err := tasks.List(c.Request.Context(), me, f)
 	if err != nil {
-		writeError(w, r, err)
+		writeError(c, err)
 		return
 	}
 	p := page[task.Task]{Data: list}
@@ -87,15 +89,15 @@ func writeTasks(w http.ResponseWriter, r *http.Request, tasks *task.Service, pro
 		p.Data = list[:limit]
 		p.NextCursor = encodeCursor(p.Data[limit-1].ID) // trang sau bắt đầu sau task cuối của trang này
 	}
-	writeJSON(w, http.StatusOK, p)
+	writeJSON(c, http.StatusOK, p)
 }
 
 // createTask tạo task mới từ body JSON trong một project của user đang đăng nhập, trả 201 kèm header Location.
-func createTask(tasks *task.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func createTask(tasks *task.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var in createTaskInput
-		if err := readJSON(w, r, &in); err != nil {
-			bodyError(w, err)
+		if err := readJSON(c, &in); err != nil {
+			bodyError(c, err)
 			return
 		}
 		t := &task.Task{
@@ -106,49 +108,49 @@ func createTask(tasks *task.Service) http.HandlerFunc {
 			DueDate:     in.DueDate,
 			Tags:        in.Tags,
 		}
-		if err := tasks.Create(r.Context(), userIDFrom(r.Context()), t); err != nil {
-			writeError(w, r, err)
+		if err := tasks.Create(c.Request.Context(), userIDFrom(c), t); err != nil {
+			writeError(c, err)
 			return
 		}
-		w.Header().Set("Location", fmt.Sprintf("/api/v1/tasks/%d", t.ID))
-		writeJSON(w, http.StatusCreated, t)
+		c.Header("Location", fmt.Sprintf("/api/v1/tasks/%d", t.ID))
+		writeJSON(c, http.StatusCreated, t)
 	}
 }
 
-// getTask trả về task có ID là wildcard {id}.
-func getTask(tasks *task.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+// getTask trả về task có ID là tham số :id.
+func getTask(tasks *task.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
-		t, _, err := tasks.Get(r.Context(), userIDFrom(r.Context()), id)
+		t, _, err := tasks.Get(c.Request.Context(), userIDFrom(c), id)
 		if err != nil {
-			writeError(w, r, err)
+			writeError(c, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, t)
+		writeJSON(c, http.StatusOK, t)
 	}
 }
 
-// updateTask sửa một phần task {id} (PATCH): chỉ những field có trong body.
-func updateTask(tasks *task.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+// updateTask sửa một phần task :id (PATCH): chỉ những field có trong body.
+func updateTask(tasks *task.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
 		var in updateTaskInput
-		if err := readJSON(w, r, &in); err != nil {
-			bodyError(w, err)
+		if err := readJSON(c, &in); err != nil {
+			bodyError(c, err)
 			return
 		}
-		t, err := tasks.Update(r.Context(), userIDFrom(r.Context()), id, in.changes())
+		t, err := tasks.Update(c.Request.Context(), userIDFrom(c), id, in.changes())
 		if err != nil {
-			writeError(w, r, err)
+			writeError(c, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, t)
+		writeJSON(c, http.StatusOK, t)
 	}
 }
 
@@ -161,22 +163,22 @@ func (in *updateTaskInput) changes() task.Changes {
 	return c
 }
 
-// deleteTask xóa task {id} cùng các file đính kèm, thành công thì trả 204 không có body.
-func deleteTask(tasks *task.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+// deleteTask xóa task :id cùng các file đính kèm, thành công thì trả 204 không có body.
+func deleteTask(tasks *task.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
-		if err := tasks.Delete(r.Context(), userIDFrom(r.Context()), id); err != nil {
-			writeError(w, r, err)
+		if err := tasks.Delete(c.Request.Context(), userIDFrom(c), id); err != nil {
+			writeError(c, err)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		c.Status(http.StatusNoContent)
 	}
 }
 
-// tagInput là body của POST /tasks/{id}/tags.
+// tagInput là body của POST /tasks/:id/tags.
 type tagInput struct {
 	Name string `json:"name"`
 }
@@ -188,37 +190,37 @@ func (in *tagInput) validate(v validator) {
 	v.check(msg == "", "name", msg)
 }
 
-// addTaskTag gắn tag trong body vào task {id}, trả về task sau khi gắn.
-func addTaskTag(tasks *task.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+// addTaskTag gắn tag trong body vào task :id, trả về task sau khi gắn.
+func addTaskTag(tasks *task.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
 		var in tagInput
-		if !decodeValid(w, r, &in) {
+		if !bindJSON(c, &in) {
 			return
 		}
-		t, err := tasks.AddTag(r.Context(), userIDFrom(r.Context()), id, in.Name)
+		t, err := tasks.AddTag(c.Request.Context(), userIDFrom(c), id, in.Name)
 		if err != nil {
-			writeError(w, r, err)
+			writeError(c, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, t)
+		writeJSON(c, http.StatusOK, t)
 	}
 }
 
-// removeTaskTag gỡ tag {name} khỏi task {id}, trả 204 kể cả khi task không có tag đó.
-func removeTaskTag(tasks *task.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+// removeTaskTag gỡ tag :name khỏi task :id, trả 204 kể cả khi task không có tag đó.
+func removeTaskTag(tasks *task.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
-		if err := tasks.RemoveTag(r.Context(), userIDFrom(r.Context()), id, r.PathValue("name")); err != nil {
-			writeError(w, r, err)
+		if err := tasks.RemoveTag(c.Request.Context(), userIDFrom(c), id, c.Param("name")); err != nil {
+			writeError(c, err)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		c.Status(http.StatusNoContent)
 	}
 }

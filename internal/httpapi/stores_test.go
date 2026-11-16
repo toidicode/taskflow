@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/netip"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/jobs"
@@ -70,9 +72,11 @@ func (s stores) deps(tokens *auth.Tokens) Deps {
 	}
 }
 
-// newMux tạo các route của API (chưa có middleware dùng chung) từ s.
-func newMux(s stores, tokens *auth.Tokens) *http.ServeMux {
-	return routes(s.deps(tokens))
+// newMux tạo engine chỉ có các route của API (chưa có middleware dùng chung) từ s.
+func newMux(s stores, tokens *auth.Tokens) *gin.Engine {
+	r := newEngine(nil)
+	routes(r, s.deps(tokens))
+	return r
 }
 
 // newAPI tạo handler của cả API từ s, như New.

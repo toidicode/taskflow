@@ -3,40 +3,69 @@ package httpapi
 import (
 	"net/http/httptest"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 )
 
-func TestRealIP(t *testing.T) {
+// TestClientIP: c.ClientIP() của engine do newEngine tạo cho đúng kết quả như realIP tự viết ở Bài 39.
+func TestClientIP(t *testing.T) {
 	trusted, err := ParseTrustedProxies("10.39.0.10, 10.0.0.0/8")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var got string
+	r := newEngine(trusted)
+	r.GET("/", func(c *gin.Context) { got = c.ClientIP() })
+
 	tests := []struct {
 		name   string
 		remote string
-		xff    []string // các header X-Forwarded-For, theo thứ tự
+		header string   // tên header, mặc định X-Forwarded-For
+		values []string // các dòng của header, theo thứ tự
 		want   string
 	}{
-		{"không qua proxy", "203.0.113.7:51234", nil, "203.0.113.7"},
-		{"client tự gửi header: bỏ qua", "203.0.113.7:51234", []string{"1.2.3.4"}, "203.0.113.7"},
-		{"qua Caddy", "10.39.0.10:40000", []string{"203.0.113.7"}, "203.0.113.7"},
-		{"qua Caddy, client gửi IP giả trước", "10.39.0.10:40000", []string{"1.2.3.4, 203.0.113.7"}, "203.0.113.7"},
-		{"qua hai proxy tin cậy", "10.39.0.10:40000", []string{"203.0.113.7, 10.1.2.3"}, "203.0.113.7"},
-		{"nhiều dòng header", "10.39.0.10:40000", []string{"1.2.3.4", "203.0.113.7"}, "203.0.113.7"},
-		{"proxy không gửi header", "10.39.0.10:40000", nil, "10.39.0.10"},
-		{"header sai", "10.39.0.10:40000", []string{"không-phải-ip"}, "10.39.0.10"},
-		{"IPv6", "[2001:db8::1]:443", nil, "2001:db8::1"},
+		{"không qua proxy", "203.0.113.7:51234", "", nil, "203.0.113.7"},
+		{"client tự gửi header: bỏ qua", "203.0.113.7:51234", "", []string{"1.2.3.4"}, "203.0.113.7"},
+		{"qua Caddy", "10.39.0.10:40000", "", []string{"203.0.113.7"}, "203.0.113.7"},
+		{"qua Caddy, client gửi IP giả trước", "10.39.0.10:40000", "", []string{"1.2.3.4, 203.0.113.7"}, "203.0.113.7"},
+		{"qua hai proxy tin cậy", "10.39.0.10:40000", "", []string{"203.0.113.7, 10.1.2.3"}, "203.0.113.7"},
+		{"nhiều dòng header", "10.39.0.10:40000", "", []string{"1.2.3.4", "203.0.113.7"}, "203.0.113.7"},
+		{"proxy không gửi header", "10.39.0.10:40000", "", nil, "10.39.0.10"},
+		{"header sai", "10.39.0.10:40000", "", []string{"không-phải-ip"}, "10.39.0.10"},
+		{"IPv6", "[2001:db8::1]:443", "", nil, "2001:db8::1"},
+		{"X-Real-IP không được đọc", "10.39.0.10:40000", "X-Real-IP", []string{"1.2.3.4"}, "10.39.0.10"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := httptest.NewRequest("GET", "/", nil)
-			r.RemoteAddr = tt.remote
-			for _, v := range tt.xff {
-				r.Header.Add("X-Forwarded-For", v)
+			req := httptest.NewRequest("GET", "/", nil)
+			req.RemoteAddr = tt.remote
+			header := tt.header
+			if header == "" {
+				header = "X-Forwarded-For"
 			}
-			if got := realIP(r, trusted); got != tt.want {
-				t.Errorf("realIP = %q, muốn %q", got, tt.want)
+			for _, v := range tt.values {
+				req.Header.Add(header, v)
+			}
+			got = ""
+			r.ServeHTTP(httptest.NewRecorder(), req)
+			if got != tt.want {
+				t.Errorf("ClientIP = %q, muốn %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestClientIPDefault: engine Gin mặc định tin mọi proxy, IP client tự khai cũng được nhận.
+func TestClientIPDefault(t *testing.T) {
+	var got string
+	r := gin.New()
+	r.GET("/", func(c *gin.Context) { got = c.ClientIP() })
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "203.0.113.7:51234"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	r.ServeHTTP(httptest.NewRecorder(), req)
+	if got != "1.2.3.4" {
+		t.Errorf("ClientIP = %q, muốn 1.2.3.4 (IP giả)", got)
 	}
 }
 

@@ -208,10 +208,11 @@ func decodePage(t *testing.T, rec *httptest.ResponseRecorder) page[task.Task] {
 	return p
 }
 
-// TestWriteTasksNeedsUser:handler danh sách không bao giờ trả về task của mọi người
+// TestWriteTasksNeedsUser: handler danh sách không bao giờ trả về task của mọi người
 // khi request không có user (route bị đăng ký thiếu requireAuth).
 func TestWriteTasksNeedsUser(t *testing.T) {
-	rec := sendAs(listTasks(newTestStores(t).deps(testTokens).Tasks), 0, "GET", "/api/v1/tasks", "")
+	h := withMiddleware(listTasks(newTestStores(t).deps(testTokens).Tasks)) // không có requireAuth
+	rec := sendAs(h, 0, "GET", "/api/v1/tasks", "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("không có user: %d %s, muốn 401", rec.Code, rec.Body)
 	}

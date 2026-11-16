@@ -3,8 +3,9 @@ package httpapi
 import (
 	"encoding/base64"
 	"fmt"
-	"net/url"
 	"strconv"
+
+	"github.com/gin-gonic/gin"
 )
 
 // Số phần tử mỗi trang: mặc định khi client không gửi ?limit= và tối đa client được xin.
@@ -22,14 +23,15 @@ type page[T any] struct {
 
 // parsePage đọc ?limit= và ?cursor= của query. Tham số sai thì ghi lỗi vào v.
 // afterID là ID cuối của trang trước, 0 khi chưa có cursor (trang đầu).
-func parsePage(query url.Values, v validator) (limit, afterID int) {
+func parsePage(c *gin.Context, v validator) (limit, afterID int) {
 	limit = defaultLimit
-	if s := query.Get("limit"); s != "" {
+	// không dùng c.DefaultQuery("limit", "20"): với ?limit= (có key, giá trị rỗng) nó trả về "", không phải "20"
+	if s := c.Query("limit"); s != "" {
 		n, err := strconv.Atoi(s)
 		v.check(err == nil && n >= 1 && n <= maxLimit, "limit", fmt.Sprintf("cần một số từ 1 tới %d", maxLimit))
 		limit = n
 	}
-	if s := query.Get("cursor"); s != "" {
+	if s := c.Query("cursor"); s != "" {
 		id, err := decodeCursor(s)
 		v.check(err == nil, "cursor", "cursor không hợp lệ")
 		afterID = id

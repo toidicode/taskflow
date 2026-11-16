@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/jobs"
 	"github.com/toidicode/taskflow/internal/project"
@@ -69,8 +71,8 @@ func authorize(req *http.Request, userID int) {
 	req.Header.Set("Authorization", "Bearer "+token)
 }
 
-// newTestMux tạo mux với store mẫu và testTokens.
-func newTestMux(t *testing.T) *http.ServeMux {
+// newTestMux tạo engine với store mẫu và testTokens.
+func newTestMux(t *testing.T) http.Handler {
 	return newMux(newTestStores(t), testTokens)
 }
 
@@ -125,8 +127,9 @@ func TestRoutes(t *testing.T) {
 		{"task không có", "GET", "/api/v1/tasks/99", 404, `{"error":"task #99: không tìm thấy"}`, ""},
 		{"xóa task không có", "DELETE", "/api/v1/tasks/99", 404, `{"error":"task #99: không tìm thấy"}`, ""},
 		{"xóa project còn task", "DELETE", "/api/v1/projects/1", 409, `{"error":"project #1: vẫn còn task, hãy xóa task trước"}`, ""},
-		{"sai method", "PUT", "/api/v1/tasks", 405, "Method Not Allowed", "GET, HEAD, POST"},
-		{"sai method có id", "PUT", "/api/v1/tasks/2", 405, "Method Not Allowed", "DELETE, GET, HEAD, PATCH"},
+		{"sai method", "PUT", "/api/v1/tasks", 405, "405 method not allowed", "GET, HEAD, POST"},
+		{"sai method có id", "PUT", "/api/v1/tasks/2", 405, "405 method not allowed", "GET, HEAD, DELETE, PATCH"},
+		{"thừa / ở cuối", "GET", "/api/v1/tasks/", 404, "404 page not found", ""},
 		{"không có route", "GET", "/api/v1/users", 404, "404 page not found", ""},
 	}
 
@@ -365,16 +368,17 @@ func TestProjectCRUD(t *testing.T) {
 	}
 }
 
-func TestGetTaskPathValue(t *testing.T) {
+func TestGetTaskParam(t *testing.T) {
 	s := newTestStores(t)
 
-	// gọi thẳng handler, không qua ServeMux nên phải tự đặt wildcard {id},
-	// không qua requireAuth nên phải tự gắn user #1 vào context
-	req := httptest.NewRequest(http.MethodGet, "/bat-ky", nil)
-	req.SetPathValue("id", "3")
-	req = req.WithContext(context.WithValue(req.Context(), userIDKey, 1))
+	// gọi thẳng handler, không qua router nên phải tự đặt tham số :id,
+	// không qua requireAuth nên phải tự gắn user #1 vào gin.Context
 	rec := httptest.NewRecorder()
-	getTask(s.deps(testTokens).Tasks).ServeHTTP(rec, req)
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/bat-ky", nil)
+	c.Params = gin.Params{{Key: "id", Value: "3"}}
+	c.Set(userIDKey, 1)
+	getTask(s.deps(testTokens).Tasks)(c)
 
 	if want := `{"id":3,"project_id":1,"title":"Viết test cho API","status":"todo"}` + "\n"; rec.Body.String() != want {
 		t.Errorf("body = %q, muốn %q", rec.Body.String(), want)
@@ -487,7 +491,8 @@ func TestWriteJSONError(t *testing.T) {
 	// Status 7 không có tên nên MarshalText trả lỗi: writeJSON phải đổi sang 500
 	logs := captureLog(t)
 	rec := httptest.NewRecorder()
-	writeJSON(rec, http.StatusOK, &task.Task{ID: 1, Status: 7})
+	c, _ := gin.CreateTestContext(rec)
+	writeJSON(c, http.StatusOK, &task.Task{ID: 1, Status: 7})
 	if rec.Code != http.StatusInternalServerError || rec.Body.String() != `{"error":"lỗi máy chủ"}`+"\n" {
 		t.Errorf("writeJSON lỗi: %d %q", rec.Code, rec.Body)
 	}

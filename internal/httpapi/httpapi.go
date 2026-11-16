@@ -1,4 +1,4 @@
-// Package httpapi là tầng HTTP của TaskFlow API: route, middleware, đọc request và ghi response.
+// Package httpapi là tầng HTTP của TaskFlow API, viết bằng Gin: route, middleware, đọc request và ghi response.
 // Luật nghiệp vụ nằm trong các service (task.Service, project.Service), handler chỉ đọc input,
 // gọi service rồi đổi kết quả hoặc lỗi thành response.
 package httpapi
@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/auth"
@@ -28,70 +30,95 @@ type Deps struct {
 	Ready       *Readiness // trả lời /ready
 }
 
-// routes tạo ServeMux chứa các route của API. Route dưới /api/v1 cần access token,
-// trừ đăng ký và đăng nhập.
-func routes(d Deps) *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", health) // liveness: process còn sống, không hỏi database
-	mux.Handle("GET /ready", d.Ready)     // readiness: nhận request được không (database, đang tắt)
-	mux.Handle("POST /api/v1/auth/register", register(d.Users))
-	mux.Handle("POST /api/v1/auth/login", login(d.Users, d.Tokens))
-
-	// api đăng ký route cần đăng nhập dưới tiền tố /api/v1: api("GET", "/tasks", h) là "GET /api/v1/tasks".
-	// Mặc định là phải đăng nhập, route công khai phải đăng ký riêng ở trên.
-	authed := requireAuth(d.Tokens)
-	api := func(method, path string, h http.Handler) {
-		mux.Handle(method+" /api/v1"+path, authed(h))
-	}
-	api("GET", "/me", me(d.Users))
-
-	api("GET", "/projects", listProjects(d.Projects))
-	api("POST", "/projects", createProject(d.Projects))
-	api("GET", "/projects/{id}", getProject(d.Projects))
-	api("PUT", "/projects/{id}", replaceProject(d.Projects))
-	api("DELETE", "/projects/{id}", deleteProject(d.Projects))
-	api("GET", "/projects/{id}/tasks", listProjectTasks(d.Projects, d.Tasks))
-
-	api("GET", "/tasks", listTasks(d.Tasks))
-	api("POST", "/tasks", createTask(d.Tasks))
-	api("GET", "/tasks/{id}", getTask(d.Tasks))
-	api("PATCH", "/tasks/{id}", updateTask(d.Tasks))
-	api("DELETE", "/tasks/{id}", deleteTask(d.Tasks))
-	api("POST", "/tasks/{id}/tags", addTaskTag(d.Tasks))
-	api("DELETE", "/tasks/{id}/tags/{name}", removeTaskTag(d.Tasks))
-
-	api("POST", "/tasks/{id}/attachments", uploadAttachment(d))
-	api("GET", "/tasks/{id}/attachments", listAttachments(d))
-	api("GET", "/attachments/{id}", downloadAttachment(d))
-	api("DELETE", "/attachments/{id}", deleteAttachment(d))
-	return mux
-}
-
-// New tạo handler của cả API: các route bọc trong middleware dùng chung, theo thứ tự từ ngoài vào trong.
-// trusted là các proxy tin cậy (VD Caddy) được phép báo IP client qua X-Forwarded-For.
+// New tạo handler của cả API: một *gin.Engine (cũng là http.Handler) với các middleware dùng chung,
+// theo thứ tự từ ngoài vào trong. trusted là các proxy tin cậy (VD Caddy) được phép báo IP client
+// qua X-Forwarded-For.
 func New(d Deps, corsOrigin string, trusted []netip.Prefix) http.Handler {
-	return chain(routes(d),
-		requestID,         // ngoài cùng: các middleware sau đều đọc được ID
-		clientIP(trusted), // trước logRequests để log có IP thật của client
-		logRequests,       // log cả response 500 do recoverPanic trả về
-		recoverPanic,      // bắt panic của mọi thứ phía trong
+	r := newEngine(trusted)
+	r.Use( // Use phải đứng trước khi đăng ký route: route đăng ký trước đó không có middleware này
+		requestID,    // ngoài cùng: các middleware sau đều đọc được ID
+		logRequests,  // log cả response 500 do recoverPanic trả về
+		recoverPanic, // bắt panic của mọi thứ phía trong
 		cors(corsOrigin),
 	)
+	routes(r, d)
+	return r
+}
+
+// newEngine tạo engine Gin chưa có middleware nào (gin.New, không phải gin.Default:
+// TaskFlow có sẵn middleware log và recover của mình) và chỉnh cho giống ServeMux.
+func newEngine(trusted []netip.Prefix) *gin.Engine {
+	r := gin.New()
+	r.HandleMethodNotAllowed = true // sai method: 405 kèm header Allow, mặc định Gin trả 404
+	r.RedirectTrailingSlash = false // /api/v1/tasks/ là 404 như ServeMux, không tự chuyển hướng
+
+	// Mặc định Gin tin MỌI proxy (0.0.0.0/0, ::/0) và đọc cả X-Real-IP: client nào cũng tự khai được IP.
+	// c.ClientIP() chỉ đọc X-Forwarded-For khi kết nối đến từ proxy tin cậy.
+	r.RemoteIPHeaders = []string{"X-Forwarded-For"} // bỏ X-Real-IP
+	proxies := make([]string, len(trusted))
+	for i, p := range trusted {
+		proxies[i] = p.String()
+	}
+	if err := r.SetTrustedProxies(proxies); err != nil { // rỗng: không tin proxy nào
+		panic(err) // không xảy ra: trusted đã qua ParseTrustedProxies
+	}
+	return r
+}
+
+// routes đăng ký các route của API vào r. Route dưới /api/v1 cần access token,
+// trừ đăng ký và đăng nhập.
+func routes(r *gin.Engine, d Deps) {
+	get(r, "/health", health)            // liveness: process còn sống, không hỏi database
+	get(r, "/ready", gin.WrapH(d.Ready)) // readiness: http.Handler sẵn có, dùng lại qua gin.WrapH
+
+	v1 := r.Group("/api/v1")
+	v1.POST("/auth/register", register(d.Users))
+	v1.POST("/auth/login", login(d.Users, d.Tokens))
+
+	// mọi route của nhóm api phải đăng nhập: requireAuth chạy trước handler của từng route
+	api := v1.Group("", requireAuth(d.Tokens))
+	get(api, "/me", me(d.Users))
+
+	projects := api.Group("/projects")
+	get(projects, "", listProjects(d.Projects))
+	projects.POST("", createProject(d.Projects))
+	get(projects, "/:id", getProject(d.Projects))
+	projects.PUT("/:id", replaceProject(d.Projects))
+	projects.DELETE("/:id", deleteProject(d.Projects))
+	get(projects, "/:id/tasks", listProjectTasks(d.Projects, d.Tasks))
+
+	tasks := api.Group("/tasks")
+	get(tasks, "", listTasks(d.Tasks))
+	tasks.POST("", createTask(d.Tasks))
+	get(tasks, "/:id", getTask(d.Tasks))
+	tasks.PATCH("/:id", updateTask(d.Tasks))
+	tasks.DELETE("/:id", deleteTask(d.Tasks))
+	tasks.POST("/:id/tags", addTaskTag(d.Tasks))
+	tasks.DELETE("/:id/tags/:name", removeTaskTag(d.Tasks))
+	tasks.POST("/:id/attachments", uploadAttachment(d))
+	get(tasks, "/:id/attachments", listAttachments(d))
+
+	get(api, "/attachments/:id", downloadAttachment(d))
+	api.DELETE("/attachments/:id", deleteAttachment(d))
+}
+
+// get đăng ký h cho cả GET và HEAD. ServeMux tự cho HEAD dùng route GET, Gin thì không.
+func get(r gin.IRoutes, path string, h gin.HandlerFunc) {
+	r.Match([]string{http.MethodGet, http.MethodHead}, path, h)
 }
 
 // health cho biết server còn sống, dùng cho Docker/load balancer kiểm tra.
-func health(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintln(w, "ok")
+func health(c *gin.Context) {
+	c.String(http.StatusOK, "ok\n")
 }
 
-// pathID đọc wildcard {id} trên path và đổi sang số nguyên dương.
+// pathID đọc tham số :id trên path và đổi sang số nguyên dương.
 // id sai thì ghi response 400 và trả về false.
-func pathID(w http.ResponseWriter, r *http.Request) (int, bool) {
-	s := r.PathValue("id")
+func pathID(c *gin.Context) (int, bool) {
+	s := c.Param("id")
 	id, err := strconv.Atoi(s)
 	if err != nil || id < 1 {
-		badParamsJSON(w, validator{"id": fmt.Sprintf("cần một số nguyên dương, nhận %q", s)})
+		badParamsJSON(c, validator{"id": fmt.Sprintf("cần một số nguyên dương, nhận %q", s)})
 		return 0, false
 	}
 	return id, true
