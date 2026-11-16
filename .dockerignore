@@ -1,0 +1,8 @@
+# Không gửi vào build context: lịch sử git, file build và dữ liệu trên máy dev
+.git
+bin/
+uploads/
+tasks.json
+*.out
+Dockerfile
+.dockerignore

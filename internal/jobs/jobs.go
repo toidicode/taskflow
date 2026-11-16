@@ -132,7 +132,7 @@ func (d *Dispatcher) Every(interval time.Duration, j Job) {
 
 // Stop ngừng nhận job mới và chờ các worker làm hết những job đã có trong hàng đợi.
 // Nếu ctx hết hạn trước, Stop hủy context của các job đang chạy, bỏ các job còn lại
-// và trả lỗi kèm số job bị bỏ dở.
+// và trả lỗi kèm số job bị bỏ dở (không job nào bị bỏ dở thì vẫn trả nil).
 func (d *Dispatcher) Stop(ctx context.Context) error {
 	d.mu.Lock()
 	if d.stopped {
@@ -156,7 +156,10 @@ func (d *Dispatcher) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		d.cancel() // job đang chạy nhận ctx.Done(), job đang chờ retry thôi chờ
 		<-done     // các worker bỏ nhanh những job còn lại rồi thoát
-		return fmt.Errorf("bỏ dở %d job: %w", d.abandoned.Load(), ctx.Err())
+		if n := d.abandoned.Load(); n > 0 {
+			return fmt.Errorf("bỏ dở %d job: %w", n, ctx.Err())
+		}
+		return nil // ctx hết hạn đúng lúc các job vừa xong: không mất job nào
 	}
 }
 

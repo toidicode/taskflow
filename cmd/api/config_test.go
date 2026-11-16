@@ -53,6 +53,11 @@ func TestLoadConfig(t *testing.T) {
 			func(c Config) bool { return c.Workers == 8 && c.QueueSize == 500 && c.CleanupEvery == 0 }},
 		{"-migrate không cần secret", []string{"-migrate"}, map[string]string{"DATABASE_URL": "postgres://u:p@db/taskflow"},
 			func(c Config) bool { return c.Migrate }},
+		{"tắt server", []string{"-shutdown-timeout", "20s"},
+			map[string]string{"TASKFLOW_SHUTDOWN_TIMEOUT": "5s", "TASKFLOW_SHUTDOWN_DELAY": "3s", "TASKFLOW_JWT_SECRET": testJWTSecret},
+			func(c Config) bool { return c.ShutdownTimeout == 20*time.Second && c.ShutdownDelay == 3*time.Second }},
+		{"-healthcheck không cần secret", []string{"-healthcheck"}, map[string]string{"TASKFLOW_ADDR": ":9000"},
+			func(c Config) bool { return c.HealthCheck && c.Addr == ":9000" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -90,6 +95,9 @@ func TestLoadConfigErrors(t *testing.T) {
 			[]string{"workers 0: phải lớn hơn 0", "cleanup-interval -1m0s: không được âm"}},
 		{"thừa tham số", []string{"serve"}, nil, []string{`không nhận tham số "serve"`}},
 		{"-migrate thiếu DATABASE_URL", []string{"-migrate"}, nil, []string{"migrate: cần đặt DATABASE_URL"}},
+		{"tắt server sai", []string{"-shutdown-timeout", "0s", "-shutdown-delay", "-1s"},
+			map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
+			[]string{"shutdown-timeout 0s: phải lớn hơn 0", "shutdown-delay -1s: không được âm"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -131,7 +139,7 @@ func TestConfigLogValue(t *testing.T) {
 	if strings.Contains(buf.String(), "bi-mat") {
 		t.Errorf("log lộ mật khẩu: %s", buf.String())
 	}
-	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`} {
+	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`, `"shutdown_timeout":"8s"`} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("log thiếu %s: %s", want, buf.String())
 		}

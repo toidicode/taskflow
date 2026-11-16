@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -25,13 +26,16 @@ type stores struct {
 	files       storage.Storage  // nội dung file đính kèm
 	jobs        *jobs.Dispatcher // việc nền
 	notifier    notify.Notifier  // gửi thông báo (trong job)
+	db          *sql.DB          // nil khi dùng store trong bộ nhớ; main đóng khi tắt server
+	ready       *readiness       // trả lời /ready
 }
 
 // newMux tạo ServeMux chứa các route của API. Route dưới /api/v1 cần access token,
 // trừ đăng ký và đăng nhập.
 func newMux(s stores, tokens *auth.Tokens) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", health)
+	mux.HandleFunc("GET /health", health) // liveness: process còn sống, không hỏi database
+	mux.Handle("GET /ready", s.ready)     // readiness: nhận request được không (database, đang tắt)
 	mux.Handle("POST /api/v1/auth/register", register(s.users))
 	mux.Handle("POST /api/v1/auth/login", login(s.users, tokens))
 

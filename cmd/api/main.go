@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/toidicode/taskflow/internal/attachment"
@@ -36,6 +39,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	if cfg.HealthCheck {
+		os.Exit(healthcheck(cfg.Addr))
+	}
+
 	logger := newLogger(os.Stderr, cfg)
 	slog.SetDefault(logger) // các hàm slog.Info, slog.Error... và package log đều đi qua logger này
 	slog.Info("đã đọc cấu hình", "config", cfg)
@@ -48,13 +55,36 @@ func main() {
 		return
 	}
 
-	s, err := openStores(context.Background(), cfg)
-	if err != nil {
-		slog.Error("khởi tạo store", "err", err)
+	if err := run(cfg); err != nil {
+		slog.Error("server dừng vì lỗi", "err", err)
 		os.Exit(1)
 	}
+	slog.Info("đã tắt server")
+}
 
-	// việc nền chạy trong cùng process; Bài 38 gọi s.jobs.Stop(ctx) khi server tắt
+// run khởi động API, chờ SIGINT (Ctrl+C) hoặc SIGTERM (docker stop) rồi tắt server an toàn.
+// Các defer chạy theo thứ tự ngược: database được đóng sau cùng, khi không còn ai dùng nó.
+func run(cfg Config) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	s, err := openStores(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("khởi tạo store: %w", err)
+	}
+	if s.db != nil {
+		defer func() {
+			s.db.Close()
+			slog.Info("đã đóng kết nối database")
+		}()
+	}
+
+	ln, err := net.Listen("tcp", cfg.Addr) // mở cổng trước: cổng đã bị chiếm thì báo lỗi ngay
+	if err != nil {
+		return err
+	}
+
+	// việc nền chạy trong cùng process, serve dừng nó sau khi HTTP server đã tắt
 	s.jobs = jobs.New(jobs.Options{Workers: cfg.Workers, QueueSize: cfg.QueueSize})
 	s.notifier = notify.Log{Logger: slog.Default()} // chưa có email: thông báo chỉ ghi ra log
 	s.jobs.Start()
@@ -65,11 +95,13 @@ func main() {
 
 	tokens := auth.NewTokens([]byte(cfg.JWTSecret), cfg.JWTTTL)
 	srv := newServer(cfg, newAPI(s, tokens, cfg.CORSOrigin))
-	slog.Info("TaskFlow API lắng nghe", "addr", cfg.Addr)
-	if err := srv.ListenAndServe(); err != nil {
-		slog.Error("server dừng", "err", err)
-		os.Exit(1)
-	}
+	slog.Info("TaskFlow API lắng nghe", "addr", cfg.Addr, "version", buildVersion())
+
+	go func() {
+		<-ctx.Done()
+		stop() // từ giờ SIGINT/SIGTERM lại có tác dụng mặc định: tín hiệu thứ hai tắt ngay process
+	}()
+	return serve(ctx, srv, ln, s, cfg.ShutdownDelay, cfg.ShutdownTimeout)
 }
 
 // newLogger tạo logger ghi ra w theo định dạng và mức log trong cfg.
@@ -136,7 +168,7 @@ func memoryStores(files storage.Storage) stores {
 	projects, tasks := project.NewMemoryStore(), task.NewMemoryStore()
 	tasks.SetProjectFunc(projectLookup(projects)) // để lọc task theo quyền (Filter.VisibleTo)
 	return stores{projects: projects, tasks: tasks, users: user.NewMemoryStore(),
-		attachments: attachment.NewMemoryStore(), files: files}
+		attachments: attachment.NewMemoryStore(), files: files, ready: &readiness{}}
 }
 
 // dbStores tạo các store lưu trong PostgreSQL qua db.
@@ -147,6 +179,8 @@ func dbStores(db *sql.DB, files storage.Storage) stores {
 		users:       postgres.NewUserStore(db),
 		attachments: postgres.NewAttachmentStore(db),
 		files:       files,
+		db:          db,
+		ready:       &readiness{db: db},
 	}
 }
 

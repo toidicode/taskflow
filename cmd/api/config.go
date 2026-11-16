@@ -28,7 +28,12 @@ type Config struct {
 	Workers      int           // số worker chạy việc nền
 	QueueSize    int           // số việc nền chờ tối đa
 	CleanupEvery time.Duration // chu kỳ dọn file mồ côi, 0 là tắt
-	Migrate      bool          // chạy migration rồi thoát, không chạy server
+
+	ShutdownTimeout time.Duration // thời gian tối đa để tắt server: chờ request đang chạy và việc nền
+	ShutdownDelay   time.Duration // báo /ready 503 rồi chờ chừng này trước khi ngừng nhận kết nối
+
+	Migrate     bool // chạy migration rồi thoát, không chạy server
+	HealthCheck bool // gọi /ready của server đang chạy rồi thoát với code 0 (ổn) hoặc 1
 }
 
 // minJWTSecret là độ dài tối thiểu của JWTSecret: HS256 cần khóa ít nhất 256 bit.
@@ -49,6 +54,8 @@ func defaultConfig() Config {
 		Workers:      4,
 		QueueSize:    100,
 		CleanupEvery: time.Hour,
+
+		ShutdownTimeout: 8 * time.Second, // nhỏ hơn 10s mà docker stop chờ trước khi gửi SIGKILL
 	}
 }
 
@@ -77,6 +84,8 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	env.int("TASKFLOW_WORKERS", &cfg.Workers)
 	env.int("TASKFLOW_QUEUE_SIZE", &cfg.QueueSize)
 	env.duration("TASKFLOW_CLEANUP_INTERVAL", &cfg.CleanupEvery)
+	env.duration("TASKFLOW_SHUTDOWN_TIMEOUT", &cfg.ShutdownTimeout)
+	env.duration("TASKFLOW_SHUTDOWN_DELAY", &cfg.ShutdownDelay)
 	if err := errors.Join(env.errs...); err != nil {
 		return cfg, err
 	}
@@ -96,9 +105,12 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.IntVar(&cfg.Workers, "workers", cfg.Workers, "số worker chạy việc nền (TASKFLOW_WORKERS)")
 	fs.IntVar(&cfg.QueueSize, "queue-size", cfg.QueueSize, "số việc nền chờ tối đa (TASKFLOW_QUEUE_SIZE)")
 	fs.DurationVar(&cfg.CleanupEvery, "cleanup-interval", cfg.CleanupEvery, "chu kỳ dọn file mồ côi, 0: tắt (TASKFLOW_CLEANUP_INTERVAL)")
+	fs.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "thời gian tối đa để tắt server (TASKFLOW_SHUTDOWN_TIMEOUT)")
+	fs.DurationVar(&cfg.ShutdownDelay, "shutdown-delay", cfg.ShutdownDelay, "chờ sau khi /ready trả 503, trước khi ngừng nhận kết nối (TASKFLOW_SHUTDOWN_DELAY)")
 	// DatabaseURL, JWTSecret cố ý không có flag: tham số dòng lệnh lộ ra trong ps
 	// Migrate chỉ có flag: là một lệnh chạy một lần chứ không phải cấu hình lâu dài
 	fs.BoolVar(&cfg.Migrate, "migrate", false, "chạy migration database rồi thoát")
+	fs.BoolVar(&cfg.HealthCheck, "healthcheck", false, "kiểm tra /ready của server đang chạy rồi thoát (cho HEALTHCHECK của Docker)")
 	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return cfg, err
 	} else if err != nil {
@@ -179,7 +191,7 @@ func (c Config) validate() error {
 	if c.Migrate && c.DatabaseURL == "" {
 		errs = append(errs, errors.New("migrate: cần đặt DATABASE_URL"))
 	}
-	if !c.Migrate && len(c.JWTSecret) < minJWTSecret { // -migrate không phát token nên không cần secret
+	if !c.Migrate && !c.HealthCheck && len(c.JWTSecret) < minJWTSecret { // -migrate, -healthcheck không phát token
 		errs = append(errs, fmt.Errorf("TASKFLOW_JWT_SECRET: cần ít nhất %d byte, VD tạo bằng openssl rand -base64 32", minJWTSecret))
 	}
 	if c.UploadDir == "" {
@@ -194,10 +206,13 @@ func (c Config) validate() error {
 	if c.CleanupEvery < 0 {
 		errs = append(errs, fmt.Errorf("cleanup-interval %v: không được âm (0 là tắt)", c.CleanupEvery))
 	}
+	if c.ShutdownDelay < 0 {
+		errs = append(errs, fmt.Errorf("shutdown-delay %v: không được âm", c.ShutdownDelay))
+	}
 	timeouts := []struct {
 		name string
 		d    time.Duration
-	}{{"read-timeout", c.ReadTimeout}, {"write-timeout", c.WriteTimeout}, {"idle-timeout", c.IdleTimeout}, {"jwt-ttl", c.JWTTTL}}
+	}{{"read-timeout", c.ReadTimeout}, {"write-timeout", c.WriteTimeout}, {"idle-timeout", c.IdleTimeout}, {"jwt-ttl", c.JWTTTL}, {"shutdown-timeout", c.ShutdownTimeout}}
 	for _, t := range timeouts {
 		if t.d <= 0 {
 			errs = append(errs, fmt.Errorf("%s %v: phải lớn hơn 0", t.name, t.d))
@@ -230,5 +245,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("workers", c.Workers),
 		slog.Int("queue_size", c.QueueSize),
 		slog.String("cleanup_interval", c.CleanupEvery.String()),
+		slog.String("shutdown_timeout", c.ShutdownTimeout.String()),
+		slog.String("shutdown_delay", c.ShutdownDelay.String()),
 	)
 }
