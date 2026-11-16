@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/jobs"
 	"github.com/toidicode/taskflow/internal/project"
@@ -23,28 +22,39 @@ import (
 	"github.com/toidicode/taskflow/internal/user"
 )
 
-// newTestStores tạo các store đã có dữ liệu mẫu như khi chạy server, cộng thêm user #1 (An)
-// là chủ của hai project mẫu.
+// newTestStores tạo các store trong bộ nhớ có dữ liệu mẫu như khi chạy server, cộng thêm
+// user #1 (An) là chủ của hai project mẫu.
 func newTestStores(t *testing.T) stores {
 	t.Helper()
-	projects, tasks, users := project.NewMemoryStore(), task.NewMemoryStore(), user.NewMemoryStore()
-	tasks.SetProjectFunc(projectLookup(projects))
-	if err := seed(context.Background(), projects, tasks); err != nil {
+	s := withTestJobs(t, memoryStores(newTestFiles(t)))
+	if err := seed(context.Background(), s.projects, s.tasks); err != nil {
 		t.Fatal(err)
 	}
-	if err := users.Add(context.Background(), &user.User{Email: "an@example.com", Name: "An"}); err != nil {
+	if err := s.users.Add(context.Background(), &user.User{Email: "an@example.com", Name: "An"}); err != nil {
 		t.Fatal(err)
 	}
-	files, err := storage.NewDisk(t.TempDir()) // thư mục tạm, go test tự xóa khi test xong
+	return s
+}
+
+// newTestFiles tạo storage trong thư mục tạm, go test tự xóa khi test xong.
+func newTestFiles(t *testing.T) *storage.Disk {
+	t.Helper()
+	files, err := storage.NewDisk(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { files.Close() })
-	d := jobs.New(jobs.Options{Workers: 1, Logger: slog.New(slog.DiscardHandler)})
-	d.Start()
-	t.Cleanup(func() { d.Stop(context.Background()) })
-	return stores{projects: projects, tasks: tasks, users: users, attachments: attachment.NewMemoryStore(), files: files,
-		jobs: d, notifier: &recordNotifier{}}
+	return files
+}
+
+// withTestJobs gắn vào s một dispatcher một worker (dừng khi test xong) và một recordNotifier.
+func withTestJobs(t *testing.T, s stores) stores {
+	t.Helper()
+	s.jobs = jobs.New(jobs.Options{Workers: 1, Logger: slog.New(slog.DiscardHandler)})
+	s.jobs.Start()
+	t.Cleanup(func() { s.jobs.Stop(context.Background()) })
+	s.notifier = &recordNotifier{}
+	return s
 }
 
 // testTokens phát và kiểm tra token trong test, secret này chỉ dùng cho test.

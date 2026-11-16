@@ -9,10 +9,12 @@ import (
 	"github.com/toidicode/taskflow/internal/postgres"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
+	"github.com/toidicode/taskflow/internal/testdb"
 )
 
 func TestAttachmentStore(t *testing.T) {
-	db := openTestDB(t)
+	t.Parallel() // mỗi test có schema riêng
+	db := testdb.New(t)
 	ctx := context.Background()
 	projects, tasks := postgres.NewProjectStore(db), postgres.NewTaskStore(db)
 	attachments := postgres.NewAttachmentStore(db)

@@ -10,13 +10,15 @@ import (
 	"github.com/toidicode/taskflow/internal/postgres"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
+	"github.com/toidicode/taskflow/internal/testdb"
 	"github.com/toidicode/taskflow/internal/user"
 )
 
 // TestTaskVisibility kiểm tra ListTasks lọc theo quyền bằng SQL, cùng kịch bản với
 // TestMemoryStore_VisibleTo của store trong bộ nhớ.
 func TestTaskVisibility(t *testing.T) {
-	db := openTestDB(t)
+	t.Parallel() // mỗi test có schema riêng
+	db := testdb.New(t)
 	ctx := context.Background()
 	projects, tasks := postgres.NewProjectStore(db), postgres.NewTaskStore(db)
 	addUsers(t, db, "An", "Binh", "Chi", "Dung")
@@ -76,7 +78,7 @@ func TestTaskVisibility(t *testing.T) {
 // TestMigrationForeignKeys chạy migration 00005 trên dữ liệu cũ: assignee không tồn tại thì
 // được đặt về NULL, owner không tồn tại thì migration lỗi và không đổi gì.
 func TestMigrationForeignKeys(t *testing.T) {
-	db := openEmptyDB(t)
+	db := testdb.Empty(t)
 	ctx := context.Background()
 	m, err := postgres.NewMigrator(db)
 	if err != nil {

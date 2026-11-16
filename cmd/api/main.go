@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -103,11 +104,8 @@ func openStores(ctx context.Context, cfg Config) (stores, error) {
 	}
 	if cfg.DatabaseURL == "" {
 		slog.Warn("chưa đặt DATABASE_URL, dữ liệu chỉ nằm trong bộ nhớ")
-		projects, tasks := project.NewMemoryStore(), task.NewMemoryStore()
-		tasks.SetProjectFunc(projectLookup(projects)) // để lọc task theo quyền (Filter.VisibleTo)
-		s := stores{projects: projects, tasks: tasks, users: user.NewMemoryStore(),
-			attachments: attachment.NewMemoryStore(), files: files}
-		return s, seed(ctx, projects, tasks)
+		s := memoryStores(files)
+		return s, seed(ctx, s.projects, s.tasks)
 	}
 	db, err := postgres.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -130,13 +128,26 @@ func openStores(ctx context.Context, cfg Config) (stores, error) {
 		db.Close()
 		return stores{}, errors.New("database còn migration chưa chạy, hãy chạy với -migrate trước")
 	}
+	return dbStores(db, files), nil
+}
+
+// memoryStores tạo các store trong bộ nhớ, chưa có dữ liệu nào.
+func memoryStores(files storage.Storage) stores {
+	projects, tasks := project.NewMemoryStore(), task.NewMemoryStore()
+	tasks.SetProjectFunc(projectLookup(projects)) // để lọc task theo quyền (Filter.VisibleTo)
+	return stores{projects: projects, tasks: tasks, users: user.NewMemoryStore(),
+		attachments: attachment.NewMemoryStore(), files: files}
+}
+
+// dbStores tạo các store lưu trong PostgreSQL qua db.
+func dbStores(db *sql.DB, files storage.Storage) stores {
 	return stores{
 		projects:    postgres.NewProjectStore(db),
 		tasks:       postgres.NewTaskStore(db),
 		users:       postgres.NewUserStore(db),
 		attachments: postgres.NewAttachmentStore(db),
 		files:       files,
-	}, nil
+	}
 }
 
 // projectLookup cho task.MemoryStore đọc project trong store projects.

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/toidicode/taskflow/internal/postgres"
+	"github.com/toidicode/taskflow/internal/testdb"
 )
 
 // tables là các bảng mà migration tạo ra.
@@ -25,7 +26,7 @@ func tableExists(t *testing.T, db *sql.DB, name string) bool {
 
 // TestMigrations chạy hết Up, lùi về 0 rồi Up lại: phần Down của mọi migration phải chạy được.
 func TestMigrations(t *testing.T) {
-	db := openEmptyDB(t)
+	db := testdb.Empty(t)
 	ctx := context.Background()
 	m, err := postgres.NewMigrator(db)
 	if err != nil {
@@ -63,7 +64,7 @@ func TestMigrations(t *testing.T) {
 // TestMigrateConcurrent mô phỏng hai instance cùng chạy -migrate trên database rỗng:
 // mỗi migration chỉ được chạy đúng một lần và không instance nào lỗi.
 func TestMigrateConcurrent(t *testing.T) {
-	db := openEmptyDB(t)
+	db := testdb.Empty(t)
 	ctx := context.Background()
 
 	var (

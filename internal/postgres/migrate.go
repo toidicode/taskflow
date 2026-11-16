@@ -19,13 +19,18 @@ var migrations embed.FS
 // Provider giữ một advisory lock của PostgreSQL trong lúc chạy migration,
 // nên nhiều instance cùng chạy thì chỉ một instance làm, các instance khác chờ.
 func NewMigrator(db *sql.DB) (*goose.Provider, error) {
-	fsys, err := fs.Sub(migrations, "migrations") // goose tìm file ở gốc của fsys
-	if err != nil {
-		return nil, err
-	}
 	locker, err := lock.NewPostgresSessionLocker()
 	if err != nil {
 		return nil, err
 	}
-	return goose.NewProvider(goose.DialectPostgres, db, fsys, goose.WithSessionLocker(locker))
+	return goose.NewProvider(goose.DialectPostgres, db, Migrations(), goose.WithSessionLocker(locker))
+}
+
+// Migrations trả về các file migration nhúng trong binary, nằm ở gốc của fs.FS như goose cần.
+func Migrations() fs.FS {
+	fsys, err := fs.Sub(migrations, "migrations")
+	if err != nil {
+		panic(err) // chỉ xảy ra khi tên thư mục sai, lỗi lập trình
+	}
+	return fsys
 }

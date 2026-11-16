@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -13,44 +12,9 @@ import (
 	"github.com/toidicode/taskflow/internal/postgres"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
+	"github.com/toidicode/taskflow/internal/testdb"
 	"github.com/toidicode/taskflow/internal/user"
 )
-
-// openTestDB kết nối tới database trong TASKFLOW_TEST_DATABASE_URL, xóa sạch schema public
-// rồi chạy lại mọi migration. Không đặt biến này thì test được bỏ qua, go test ./... vẫn chạy
-// được trên máy không có PostgreSQL. Test xóa sạch dữ liệu nên đừng trỏ biến này vào database thật.
-func openTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db := openEmptyDB(t)
-	m, err := postgres.NewMigrator(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.Up(context.Background()); err != nil {
-		t.Fatalf("chạy migration: %v", err)
-	}
-	return db
-}
-
-// openEmptyDB kết nối tới database test và xóa mọi bảng, kể cả goose_db_version.
-func openEmptyDB(t *testing.T) *sql.DB {
-	t.Helper()
-	url := os.Getenv("TASKFLOW_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("chưa đặt TASKFLOW_TEST_DATABASE_URL")
-	}
-	ctx := context.Background()
-	db, err := postgres.Open(ctx, url)
-	if err != nil {
-		t.Fatalf("kết nối database test: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	if _, err := db.ExecContext(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public"); err != nil {
-		t.Fatalf("xóa schema: %v", err)
-	}
-	return db
-}
 
 // addUsers thêm các user tên names vào bảng users, user đầu tiên có ID 1.
 // Từ migration 00005, owner_id và assignee_id phải là ID của user có thật.
@@ -66,7 +30,8 @@ func addUsers(t *testing.T, db *sql.DB, names ...string) {
 }
 
 func TestTaskStore(t *testing.T) {
-	db := openTestDB(t)
+	t.Parallel() // mỗi test có schema riêng
+	db := testdb.New(t)
 	ctx := context.Background()
 	projects, tasks := postgres.NewProjectStore(db), postgres.NewTaskStore(db)
 	addUsers(t, db, "An", "Binh") // chủ project và người được giao
@@ -177,7 +142,8 @@ func count(t *testing.T, db *sql.DB, table string) int {
 }
 
 func TestTaskTags(t *testing.T) {
-	db := openTestDB(t)
+	t.Parallel() // mỗi test có schema riêng
+	db := testdb.New(t)
 	ctx := context.Background()
 	projects, tasks := postgres.NewProjectStore(db), postgres.NewTaskStore(db)
 	addUsers(t, db, "An")
@@ -272,7 +238,8 @@ func TestTaskTags(t *testing.T) {
 }
 
 func TestProjectStore(t *testing.T) {
-	db := openTestDB(t)
+	t.Parallel() // mỗi test có schema riêng
+	db := testdb.New(t)
 	ctx := context.Background()
 	s := postgres.NewProjectStore(db)
 	addUsers(t, db, "An", "Binh", "Chi")
@@ -317,7 +284,8 @@ func TestProjectStore(t *testing.T) {
 }
 
 func TestUserStore(t *testing.T) {
-	db := openTestDB(t)
+	t.Parallel() // mỗi test có schema riêng
+	db := testdb.New(t)
 	ctx := context.Background()
 	s := postgres.NewUserStore(db)
 
