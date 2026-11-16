@@ -71,14 +71,20 @@ type tokenResponse struct {
 
 // login kiểm tra email, mật khẩu rồi phát access token.
 // Sai email hay sai mật khẩu đều nhận cùng một lỗi 401.
-func login(users user.Store, tokens *auth.Tokens) gin.HandlerFunc {
+func login(users user.Store, tokens *auth.Tokens, rl RateLimit) gin.HandlerFunc {
+	emailPolicy := policy{"login-email", rl.Limits.LoginEmail, false}
 	return func(c *gin.Context) {
 		var in loginInput
 		if err := readJSON(c, &in); err != nil {
 			bodyError(c, err)
 			return
 		}
-		u, err := users.GetByEmail(c.Request.Context(), user.NormalizeEmail(in.Email))
+		// giới hạn theo email, cộng dồn từ mọi IP: chặn dò mật khẩu của một tài khoản từ nhiều IP
+		email := user.NormalizeEmail(in.Email)
+		if !rl.allow(c, emailPolicy, rl.emailKey(email)) {
+			return
+		}
+		u, err := users.GetByEmail(c.Request.Context(), email)
 		if err != nil && !errors.Is(err, user.ErrNotFound) {
 			writeError(c, err)
 			return

@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/toidicode/taskflow/internal/auth"
+	"github.com/toidicode/taskflow/internal/cache"
 	"github.com/toidicode/taskflow/internal/httpapi"
 	"github.com/toidicode/taskflow/internal/jobs"
 	"github.com/toidicode/taskflow/internal/notify"
@@ -81,19 +82,23 @@ func run(cfg Config) error {
 		}()
 	}
 
+	var rc *cache.Redis // nil khi không có Redis
 	if cfg.RedisURL != "" {
-		rc, cached, err := useCache(ctx, a, cfg.RedisURL, cfg.CacheTTL)
+		rc, err = connectRedis(ctx, cfg.RedisURL)
 		if err != nil {
-			return fmt.Errorf("cache: %w", err)
+			return fmt.Errorf("redis: %w", err)
 		}
+		cached := useCache(a, rc, cfg.CacheTTL)
 		defer func() { // chạy trước khi đóng database: defer chạy theo thứ tự ngược
 			st := cached.Stats()
 			slog.Info("thống kê cache project", "hits", st.Hits, "misses", st.Misses, "errors", st.Errors)
 			rc.Close()
 		}()
+		slog.Info("bật cache project, rate limit đếm trong Redis", "cache_ttl", cfg.CacheTTL)
 	} else {
-		slog.Info("chưa đặt TASKFLOW_REDIS_URL, không dùng cache")
+		slog.Info("chưa đặt TASKFLOW_REDIS_URL: không cache, rate limit đếm trong bộ nhớ")
 	}
+	a.rateLimit = rateLimit(rc, cfg)
 
 	ln, err := net.Listen("tcp", cfg.Addr) // mở cổng trước: cổng đã bị chiếm thì báo lỗi ngay
 	if err != nil {

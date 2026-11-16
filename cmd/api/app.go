@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -18,6 +20,7 @@ import (
 	"github.com/toidicode/taskflow/internal/notify"
 	"github.com/toidicode/taskflow/internal/postgres"
 	"github.com/toidicode/taskflow/internal/project"
+	"github.com/toidicode/taskflow/internal/ratelimit"
 	"github.com/toidicode/taskflow/internal/storage"
 	"github.com/toidicode/taskflow/internal/task"
 	"github.com/toidicode/taskflow/internal/user"
@@ -36,6 +39,7 @@ type app struct {
 	jobs        *jobs.Dispatcher   // việc nền
 	notifier    notify.Notifier    // gửi thông báo (trong job)
 	ready       *httpapi.Readiness // trả lời /ready, serve bật trạng thái đang tắt
+	rateLimit   httpapi.RateLimit  // giới hạn số request, Limiter nil là tắt
 }
 
 // handler tạo các service từ store rồi tạo handler HTTP của cả API.
@@ -51,6 +55,7 @@ func (a *app) handler(tokens *auth.Tokens, corsOrigin string, trusted []netip.Pr
 		Files:       a.files,
 		Tokens:      tokens,
 		Ready:       a.ready,
+		RateLimit:   a.rateLimit,
 	}, corsOrigin, trusted)
 }
 
@@ -111,23 +116,50 @@ func dbApp(db *sql.DB, files storage.Storage) *app {
 	}
 }
 
-// useCache bọc store project của a bằng cache Redis ở url. Redis chưa chạy lúc khởi động thì chỉ cảnh báo:
-// go-redis tự kết nối khi Redis lên lại, trong lúc đó mọi request đọc thẳng database.
-func useCache(ctx context.Context, a *app, url string, ttl time.Duration) (*cache.Redis, *project.CachedStore, error) {
+// connectRedis tạo client Redis cho url, dùng chung cho cache và rate limit. Redis chưa chạy lúc
+// khởi động thì chỉ cảnh báo: go-redis tự kết nối khi Redis lên lại, trong lúc đó cache đọc thẳng
+// database còn rate limit đếm trong bộ nhớ (xem httpapi.RateLimit).
+func connectRedis(ctx context.Context, url string) (*cache.Redis, error) {
 	rc, err := cache.NewRedis(url)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	pctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	if err := rc.Ping(pctx); err != nil {
-		slog.Warn("chưa kết nối được Redis, tạm đọc thẳng database", "err", err)
+		slog.Warn("chưa kết nối được Redis", "err", err)
 	} else {
-		slog.Info("đã kết nối Redis, bật cache cho project", "ttl", ttl)
+		slog.Info("đã kết nối Redis")
 	}
+	return rc, nil
+}
+
+// useCache bọc store project của a bằng cache trong Redis.
+func useCache(a *app, rc *cache.Redis, ttl time.Duration) *project.CachedStore {
 	cached := project.NewCachedStore(a.projects, rc, project.CacheOptions{TTL: ttl})
 	a.projects = cached // mọi nơi nhận a.projects (project.Service, task.Service) đi qua cache
-	return rc, cached, nil
+	return cached
+}
+
+// rateLimit chọn nơi đếm request: Redis khi có, để mọi bản API đếm chung; không thì bộ nhớ.
+// Bộ nhớ cũng là Fallback cho route đăng nhập, đăng ký khi Redis lỗi.
+func rateLimit(rc *cache.Redis, cfg Config) httpapi.RateLimit {
+	mem := ratelimit.NewMemory()
+	rl := httpapi.RateLimit{Limiter: mem, Fallback: mem, Limits: httpapi.Limits{
+		AuthIP: cfg.RateAuthIP, LoginEmail: cfg.RateLoginEmail, User: cfg.RateUser,
+	}, EmailSecret: emailSecret(cfg.JWTSecret)}
+	if rc != nil {
+		rl.Limiter = ratelimit.NewRedis(rc.Client(), "taskflow:ratelimit:")
+	}
+	return rl
+}
+
+// emailSecret suy ra khóa HMAC cho key email từ TASKFLOW_JWT_SECRET: không cần thêm một bí mật
+// để cấu hình, và khóa này khác hẳn khóa ký token. Đổi JWT secret thì mọi bucket email về đầy.
+func emailSecret(jwtSecret string) []byte {
+	mac := hmac.New(sha256.New, []byte(jwtSecret))
+	mac.Write([]byte("taskflow:ratelimit:email"))
+	return mac.Sum(nil)
 }
 
 // projectLookup cho task.MemoryStore đọc project trong store projects.

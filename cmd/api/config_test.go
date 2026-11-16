@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/toidicode/taskflow/internal/ratelimit"
 )
 
 // testJWTSecret là secret đủ 32 byte cho các test cần cấu hình hợp lệ.
@@ -63,6 +65,12 @@ func TestLoadConfig(t *testing.T) {
 			func(c Config) bool {
 				return c.RedisURL == "redis://:mat-khau@cache:6379/0" && c.CacheTTL == 30*time.Second
 			}},
+		{"rate limit", []string{"-rate-user", "off"},
+			map[string]string{"TASKFLOW_RATE_AUTH_IP": "20/1m", "TASKFLOW_RATE_LOGIN_EMAIL": "3/15m", "TASKFLOW_RATE_USER": "100/1s", "TASKFLOW_JWT_SECRET": testJWTSecret},
+			func(c Config) bool {
+				return c.RateAuthIP == ratelimit.Limit{N: 20, Period: time.Minute} &&
+					c.RateLoginEmail == ratelimit.Limit{N: 3, Period: 15 * time.Minute} && !c.RateUser.Enabled()
+			}},
 		{"-healthcheck không cần secret", []string{"-healthcheck"}, map[string]string{"TASKFLOW_ADDR": ":9000"},
 			func(c Config) bool { return c.HealthCheck && c.Addr == ":9000" }},
 	}
@@ -107,6 +115,9 @@ func TestLoadConfigErrors(t *testing.T) {
 		{"cache sai", []string{"-cache-ttl", "0s"},
 			map[string]string{"TASKFLOW_REDIS_URL": "http://cache:6379", "TASKFLOW_JWT_SECRET": testJWTSecret},
 			[]string{"TASKFLOW_REDIS_URL: redis: invalid URL scheme: http", "cache-ttl 0s: phải lớn hơn 0"}},
+		{"rate limit sai", []string{"-rate-user", "nhiều"},
+			map[string]string{"TASKFLOW_RATE_AUTH_IP": "10", "TASKFLOW_JWT_SECRET": testJWTSecret},
+			[]string{`TASKFLOW_RATE_AUTH_IP: "10": cần dạng số-request/thời-gian như 10/1m, hoặc off`}},
 		{"tắt server sai", []string{"-shutdown-timeout", "0s", "-shutdown-delay", "-1s"},
 			map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
 			[]string{"shutdown-timeout 0s: phải lớn hơn 0", "shutdown-delay -1s: không được âm"}},
@@ -152,7 +163,7 @@ func TestConfigLogValue(t *testing.T) {
 	if strings.Contains(buf.String(), "bi-mat") {
 		t.Errorf("log lộ mật khẩu: %s", buf.String())
 	}
-	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`, `"shutdown_timeout":"8s"`, `"redis_url":"[đã ẩn]"`, `"cache_ttl":"1m0s"`} {
+	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`, `"shutdown_timeout":"8s"`, `"redis_url":"[đã ẩn]"`, `"cache_ttl":"1m0s"`, `"rate_auth_ip":"10/1m"`, `"rate_login_email":"5/10m"`, `"rate_user":"600/1m"`} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("log thiếu %s: %s", want, buf.String())
 		}

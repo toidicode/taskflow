@@ -28,6 +28,7 @@ type Deps struct {
 	Files       storage.Storage  // nội dung file đính kèm
 	Tokens      *auth.Tokens
 	Ready       *Readiness // trả lời /ready
+	RateLimit   RateLimit  // giới hạn số request, Limiter nil là tắt
 }
 
 // New tạo handler của cả API: một *gin.Engine (cũng là http.Handler) với các middleware dùng chung,
@@ -71,12 +72,16 @@ func routes(r *gin.Engine, d Deps) {
 	get(r, "/health", health)            // liveness: process còn sống, không hỏi database
 	get(r, "/ready", gin.WrapH(d.Ready)) // readiness: http.Handler sẵn có, dùng lại qua gin.WrapH
 
+	rl, lim := d.RateLimit, d.RateLimit.Limits
 	v1 := r.Group("/api/v1")
-	v1.POST("/auth/register", register(d.Users))
-	v1.POST("/auth/login", login(d.Users, d.Tokens))
+	// đăng ký, đăng nhập: chặn theo IP trước khi đọc body và chạy bcrypt; Redis lỗi thì vẫn
+	// giới hạn bằng bộ nhớ của từng bản API (không cho qua hết, cũng không chặn hết)
+	v1.POST("/auth/register", rl.middleware(policy{"register-ip", lim.AuthIP, false}, ipKey), register(d.Users))
+	v1.POST("/auth/login", rl.middleware(policy{"login-ip", lim.AuthIP, false}, ipKey), login(d.Users, d.Tokens, rl))
 
-	// mọi route của nhóm api phải đăng nhập: requireAuth chạy trước handler của từng route
-	api := v1.Group("", requireAuth(d.Tokens))
+	// mọi route của nhóm api phải đăng nhập: requireAuth chạy trước handler của từng route,
+	// rồi tới giới hạn theo user (Redis lỗi thì cho qua: luật này để chia đều tài nguyên, không để chống tấn công)
+	api := v1.Group("", requireAuth(d.Tokens), rl.middleware(policy{"user", lim.User, true}, userKey))
 	get(api, "/me", me(d.Users))
 
 	projects := api.Group("/projects")

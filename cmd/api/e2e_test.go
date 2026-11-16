@@ -10,10 +10,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/cache"
 	"github.com/toidicode/taskflow/internal/project"
+	"github.com/toidicode/taskflow/internal/ratelimit"
 	"github.com/toidicode/taskflow/internal/task"
 	"github.com/toidicode/taskflow/internal/testdb"
 	"github.com/toidicode/taskflow/internal/testredis"
@@ -89,6 +91,14 @@ func signUp(t *testing.T, srv *httptest.Server, name, email, password string) *c
 	return &client{t: t, srv: srv, token: tok.AccessToken}
 }
 
+// e2eLimits là giới hạn request khi chạy kịch bản: đủ rộng cho các bước bình thường,
+// riêng đăng nhập theo email chỉ 2 lần mỗi phút để thử 429.
+var e2eLimits = Config{
+	RateAuthIP:     ratelimit.Limit{N: 10, Period: time.Minute},
+	RateLoginEmail: ratelimit.Limit{N: 2, Period: time.Minute},
+	RateUser:       ratelimit.Limit{N: 100, Period: time.Minute},
+}
+
 // TestEndToEnd chạy một kịch bản đầy đủ qua HTTP thật: server httptest, http.Client và mọi middleware.
 // Cùng kịch bản chạy với store trong bộ nhớ, với PostgreSQL (khi có TASKFLOW_TEST_DATABASE_URL),
 // và hai bản có cache project: cache trong bộ nhớ, Redis thật (khi có thêm TASKFLOW_TEST_REDIS_URL).
@@ -107,10 +117,12 @@ func TestEndToEnd(t *testing.T) {
 			a.projects = project.NewCachedStore(a.projects, cache.NewMemory(), project.CacheOptions{})
 			return a
 		}},
-		{"postgres+redis", func(t *testing.T) *app {
+		{"postgres+redis", func(t *testing.T) *app { // cache và rate limit đều trong Redis
 			rc, prefix := testredis.New(t)
 			a := dbApp(testdb.New(t), newTestFiles(t))
 			a.projects = project.NewCachedStore(a.projects, rc, project.CacheOptions{Prefix: prefix})
+			a.rateLimit = rateLimit(nil, e2eLimits)
+			a.rateLimit.Limiter = ratelimit.NewRedis(rc.Client(), prefix+"ratelimit:")
 			return a
 		}},
 	}
@@ -118,6 +130,9 @@ func TestEndToEnd(t *testing.T) {
 		t.Run(b.name, func(t *testing.T) {
 			logs := captureLog(t) // log của server không lẫn vào output của go test
 			s := withTestJobs(t, b.open(t))
+			if s.rateLimit.Limiter == nil {
+				s.rateLimit = rateLimit(nil, e2eLimits) // đếm trong bộ nhớ
+			}
 			srv := httptest.NewServer(s.handler(testTokens, "http://localhost:5173", nil))
 			t.Cleanup(func() { // đăng ký trước nên chạy sau srv.Close
 				if t.Failed() {
@@ -189,10 +204,24 @@ func TestEndToEnd(t *testing.T) {
 				t.Errorf("thông báo: %+v, muốn một thông báo task #%d cho An", sent, tk.ID)
 			}
 
-			// server thật hỗ trợ đặt deadline cho từng request (Bài 35), cache không lỗi: không có cảnh báo nào
-			// trong log, ngoài dòng log WARN của request 404 cố ý gửi ở trên
+			// dò mật khẩu của một email: hai lần sai thì 401, lần thứ ba bị chặn theo email
+			anon := &client{t: t, srv: srv}
+			guess := map[string]string{"email": "khach@example.com", "password": "doan-mo"}
+			call[struct{}](anon, "POST", "/api/v1/auth/login", guess, http.StatusUnauthorized)
+			call[struct{}](anon, "POST", "/api/v1/auth/login", guess, http.StatusUnauthorized)
+			resp, err := srv.Client().Post(srv.URL+"/api/v1/auth/login", "application/json", strings.NewReader(`{"email":"khach@example.com","password":"x"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") == "" {
+				t.Errorf("lần đoán thứ ba: %d, Retry-After %q; muốn 429 có Retry-After", resp.StatusCode, resp.Header.Get("Retry-After"))
+			}
+
+			// server thật hỗ trợ đặt deadline cho từng request (Bài 35), cache, rate limit không lỗi: không có
+			// cảnh báo nào trong log, ngoài dòng log WARN của các request 404, 401, 429 cố ý gửi ở trên
 			for _, e := range logEntries(t, logs) {
-				if e["msg"] == "request" && e["status"] == float64(http.StatusNotFound) {
+				if st := e["status"]; e["msg"] == "request" && (st == 404.0 || st == 401.0 || st == 429.0) {
 					continue
 				}
 				if e["level"] == "WARN" || e["level"] == "ERROR" {

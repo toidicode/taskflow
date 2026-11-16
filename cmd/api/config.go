@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/toidicode/taskflow/internal/cache"
 	"github.com/toidicode/taskflow/internal/httpapi"
+	"github.com/toidicode/taskflow/internal/ratelimit"
 )
 
 // Config là toàn bộ cấu hình của TaskFlow API.
@@ -33,6 +35,10 @@ type Config struct {
 	CleanupEvery time.Duration // chu kỳ dọn file mồ côi, 0 là tắt
 	RedisURL     string        // chuỗi kết nối Redis cho cache (có thể chứa mật khẩu), rỗng là không cache
 	CacheTTL     time.Duration // thời gian sống của dữ liệu trong cache
+
+	RateAuthIP     ratelimit.Limit // đăng ký, đăng nhập: mỗi IP
+	RateLoginEmail ratelimit.Limit // đăng nhập: mỗi email, cộng dồn từ mọi IP
+	RateUser       ratelimit.Limit // route cần đăng nhập: mỗi user
 
 	ShutdownTimeout time.Duration // thời gian tối đa để tắt server: chờ request đang chạy và việc nền
 	ShutdownDelay   time.Duration // báo /ready 503 rồi chờ chừng này trước khi ngừng nhận kết nối
@@ -61,6 +67,10 @@ func defaultConfig() Config {
 		QueueSize:    100,
 		CleanupEvery: time.Hour,
 		CacheTTL:     time.Minute,
+
+		RateAuthIP:     ratelimit.Limit{N: 10, Period: time.Minute},
+		RateLoginEmail: ratelimit.Limit{N: 5, Period: 10 * time.Minute},
+		RateUser:       ratelimit.Limit{N: 600, Period: time.Minute},
 
 		ShutdownTimeout: 8 * time.Second, // nhỏ hơn 10s mà docker stop chờ trước khi gửi SIGKILL
 	}
@@ -93,6 +103,9 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	env.duration("TASKFLOW_CLEANUP_INTERVAL", &cfg.CleanupEvery)
 	env.str("TASKFLOW_REDIS_URL", &cfg.RedisURL)
 	env.duration("TASKFLOW_CACHE_TTL", &cfg.CacheTTL)
+	env.text("TASKFLOW_RATE_AUTH_IP", &cfg.RateAuthIP)
+	env.text("TASKFLOW_RATE_LOGIN_EMAIL", &cfg.RateLoginEmail)
+	env.text("TASKFLOW_RATE_USER", &cfg.RateUser)
 	env.duration("TASKFLOW_SHUTDOWN_TIMEOUT", &cfg.ShutdownTimeout)
 	env.duration("TASKFLOW_SHUTDOWN_DELAY", &cfg.ShutdownDelay)
 	env.str("TASKFLOW_TRUSTED_PROXIES", &cfg.TrustedProxies)
@@ -116,6 +129,9 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.IntVar(&cfg.QueueSize, "queue-size", cfg.QueueSize, "số việc nền chờ tối đa (TASKFLOW_QUEUE_SIZE)")
 	fs.DurationVar(&cfg.CleanupEvery, "cleanup-interval", cfg.CleanupEvery, "chu kỳ dọn file mồ côi, 0: tắt (TASKFLOW_CLEANUP_INTERVAL)")
 	fs.DurationVar(&cfg.CacheTTL, "cache-ttl", cfg.CacheTTL, "thời gian sống của dữ liệu trong cache (TASKFLOW_CACHE_TTL)")
+	fs.TextVar(&cfg.RateAuthIP, "rate-auth-ip", cfg.RateAuthIP, "giới hạn đăng ký/đăng nhập mỗi IP, VD 10/1m hoặc off (TASKFLOW_RATE_AUTH_IP)")
+	fs.TextVar(&cfg.RateLoginEmail, "rate-login-email", cfg.RateLoginEmail, "giới hạn đăng nhập mỗi email (TASKFLOW_RATE_LOGIN_EMAIL)")
+	fs.TextVar(&cfg.RateUser, "rate-user", cfg.RateUser, "giới hạn request mỗi user đã đăng nhập (TASKFLOW_RATE_USER)")
 	fs.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "thời gian tối đa để tắt server (TASKFLOW_SHUTDOWN_TIMEOUT)")
 	fs.DurationVar(&cfg.ShutdownDelay, "shutdown-delay", cfg.ShutdownDelay, "chờ sau khi /ready trả 503, trước khi ngừng nhận kết nối (TASKFLOW_SHUTDOWN_DELAY)")
 	fs.StringVar(&cfg.TrustedProxies, "trusted-proxies", cfg.TrustedProxies, "IP/CIDR của reverse proxy, cách nhau bởi dấu phẩy (TASKFLOW_TRUSTED_PROXIES)")
@@ -173,6 +189,17 @@ func (e *envReader) duration(key string, dst *time.Duration) {
 		return
 	}
 	*dst = d
+}
+
+// text đọc biến key bằng UnmarshalText của dst, VD ratelimit.Limit.
+func (e *envReader) text(key string, dst encoding.TextUnmarshaler) {
+	v, ok := e.lookup(key)
+	if !ok {
+		return
+	}
+	if err := dst.UnmarshalText([]byte(v)); err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s: %w", key, err))
+	}
 }
 
 func (e *envReader) level(key string, dst *slog.Level) {
@@ -267,6 +294,9 @@ func (c Config) LogValue() slog.Value {
 		slog.String("cleanup_interval", c.CleanupEvery.String()),
 		slog.String("redis_url", hidden(c.RedisURL)),
 		slog.String("cache_ttl", c.CacheTTL.String()),
+		slog.String("rate_auth_ip", c.RateAuthIP.String()),
+		slog.String("rate_login_email", c.RateLoginEmail.String()),
+		slog.String("rate_user", c.RateUser.String()),
 		slog.String("shutdown_timeout", c.ShutdownTimeout.String()),
 		slog.String("shutdown_delay", c.ShutdownDelay.String()),
 		slog.String("trusted_proxies", c.TrustedProxies),
