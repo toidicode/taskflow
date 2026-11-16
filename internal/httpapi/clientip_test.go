@@ -1,4 +1,4 @@
-package main
+package httpapi
 
 import (
 	"net/http/httptest"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestRealIP(t *testing.T) {
-	trusted, err := parseTrustedProxies("10.39.0.10, 10.0.0.0/8")
+	trusted, err := ParseTrustedProxies("10.39.0.10, 10.0.0.0/8")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestRealIP(t *testing.T) {
 }
 
 func TestParseTrustedProxies(t *testing.T) {
-	got, err := parseTrustedProxies(" 10.39.0.10 ,10.39.0.7/24,, ::1")
+	got, err := ParseTrustedProxies(" 10.39.0.10 ,10.39.0.7/24,, ::1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,14 +54,14 @@ func TestParseTrustedProxies(t *testing.T) {
 			t.Errorf("[%d] = %s, muốn %s", i, got[i], want[i])
 		}
 	}
-	if _, err := parseTrustedProxies("caddy"); err == nil {
+	if _, err := ParseTrustedProxies("caddy"); err == nil {
 		t.Error("tên host phải là lỗi")
 	}
 }
 
 func TestNewAPIClientIP(t *testing.T) {
 	logs := captureLog(t)
-	trusted, _ := parseTrustedProxies("10.39.0.10")
+	trusted, _ := ParseTrustedProxies("10.39.0.10")
 	api := newAPI(newTestStores(t), testTokens, "", trusted)
 
 	req := httptest.NewRequest("GET", "/health", nil)

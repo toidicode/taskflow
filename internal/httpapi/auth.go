@@ -1,4 +1,4 @@
-package main
+package httpapi
 
 import (
 	"context"
@@ -42,7 +42,7 @@ func register(users user.Store) http.HandlerFunc {
 		}
 		hash, err := auth.HashPassword(in.Password)
 		if err != nil {
-			storeError(w, r, err)
+			writeError(w, r, err)
 			return
 		}
 		u := &user.User{Email: user.NormalizeEmail(in.Email), Name: strings.TrimSpace(in.Name), PasswordHash: hash}
@@ -50,7 +50,7 @@ func register(users user.Store) http.HandlerFunc {
 			errorJSON(w, http.StatusConflict, user.ErrEmailTaken.Error())
 			return
 		} else if err != nil {
-			storeError(w, r, err)
+			writeError(w, r, err)
 			return
 		}
 		w.Header().Set("Location", "/api/v1/me")
@@ -82,7 +82,7 @@ func login(users user.Store, tokens *auth.Tokens) http.HandlerFunc {
 		}
 		u, err := users.GetByEmail(r.Context(), user.NormalizeEmail(in.Email))
 		if err != nil && !errors.Is(err, user.ErrNotFound) {
-			storeError(w, r, err)
+			writeError(w, r, err)
 			return
 		}
 		// không có user thì u.PasswordHash rỗng: CheckPassword vẫn chạy bcrypt rồi trả false
@@ -92,7 +92,7 @@ func login(users user.Store, tokens *auth.Tokens) http.HandlerFunc {
 		}
 		token, err := tokens.Issue(u.ID)
 		if err != nil {
-			storeError(w, r, err)
+			writeError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, tokenResponse{
@@ -112,7 +112,7 @@ func me(users user.Store) http.HandlerFunc {
 			return
 		}
 		if err != nil {
-			storeError(w, r, err)
+			writeError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, u)

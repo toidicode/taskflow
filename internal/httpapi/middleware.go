@@ -1,4 +1,4 @@
-package main
+package httpapi
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"runtime/debug"
 	"time"
+
+	"github.com/toidicode/taskflow/internal/reqlog"
 )
 
 // middleware nhận một handler và trả về handler mới bọc quanh nó.
@@ -26,9 +28,8 @@ func chain(h http.Handler, mws ...middleware) http.Handler {
 type ctxKey int
 
 const (
-	requestIDKey ctxKey = iota
-	userIDKey           // ID của user đã đăng nhập, do requireAuth gắn vào
-	clientIPKey         // IP của client, do clientIP gắn vào
+	userIDKey   ctxKey = iota // ID của user đã đăng nhập, do requireAuth gắn vào
+	clientIPKey               // IP của client, do clientIP gắn vào
 )
 
 // requestID gắn cho mỗi request một ID: lấy từ header X-Request-ID nếu hợp lệ,
@@ -40,7 +41,7 @@ func requestID(next http.Handler) http.Handler {
 			id = rand.Text()
 		}
 		w.Header().Set("X-Request-ID", id)
-		ctx := context.WithValue(r.Context(), requestIDKey, id)
+		ctx := reqlog.WithID(r.Context(), id) // service cũng đọc được ID để ghi log
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -62,10 +63,7 @@ func validRequestID(id string) bool {
 
 // requestIDFrom đọc request ID từ context, trả về "-" khi không có.
 func requestIDFrom(ctx context.Context) string {
-	if id, ok := ctx.Value(requestIDKey).(string); ok {
-		return id
-	}
-	return "-"
+	return reqlog.ID(ctx)
 }
 
 // statusRecorder bọc ResponseWriter để ghi lại status code và số byte của body.
@@ -100,7 +98,7 @@ func (rec *statusRecorder) Unwrap() http.ResponseWriter {
 // requestLogger trả về logger mặc định gắn sẵn request_id của r,
 // mọi dòng log về request này đều có cùng ID.
 func requestLogger(r *http.Request) *slog.Logger {
-	return slog.With("request_id", requestIDFrom(r.Context()))
+	return reqlog.Logger(r.Context())
 }
 
 // logRequests ghi một dòng log cho mỗi request: IP client, method, path, status, số byte, thời gian xử lý.

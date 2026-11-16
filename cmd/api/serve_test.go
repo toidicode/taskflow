@@ -12,15 +12,14 @@ import (
 	"time"
 
 	"github.com/toidicode/taskflow/internal/jobs"
-	"github.com/toidicode/taskflow/internal/testdb"
 )
 
 // slowServer chạy serve trên một cổng ngẫu nhiên với route GET /slow: báo started khi bắt đầu
 // rồi chờ release mới trả "xong". Hủy ctx là giả lập nhận SIGTERM; kết quả của serve gửi vào kênh trả về.
-func slowServer(t *testing.T, ctx context.Context, s stores, timeout time.Duration) (addr string, started, release chan struct{}, done chan error) {
+func slowServer(t *testing.T, ctx context.Context, s *app, timeout time.Duration) (addr string, started, release chan struct{}, done chan error) {
 	t.Helper()
 	started, release, done = make(chan struct{}), make(chan struct{}), make(chan error, 1)
-	mux := newMux(s, testTokens)
+	mux := http.NewServeMux()
 	mux.HandleFunc("GET /slow", func(w http.ResponseWriter, r *http.Request) {
 		close(started)
 		<-release
@@ -56,7 +55,7 @@ func get(url string) chan string {
 
 func TestServeWaitsForRequests(t *testing.T) {
 	captureLog(t)
-	s := newTestStores(t)
+	s := newTestApp(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	addr, started, release, done := slowServer(t, ctx, s, 5*time.Second)
@@ -78,8 +77,10 @@ func TestServeWaitsForRequests(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !s.ready.stopping.Load() {
-		t.Error("/ready chưa chuyển sang đang tắt")
+	rec := httptest.NewRecorder()
+	s.ready.ServeHTTP(rec, httptest.NewRequest("GET", "/ready", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("/ready = %d, muốn 503: chưa chuyển sang đang tắt", rec.Code)
 	}
 	select {
 	case err := <-done:
@@ -103,7 +104,7 @@ func TestServeShutdownTimeout(t *testing.T) {
 	captureLog(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	addr, started, release, done := slowServer(t, ctx, newTestStores(t), 100*time.Millisecond)
+	addr, started, release, done := slowServer(t, ctx, newTestApp(t), 100*time.Millisecond)
 	defer close(release) // handler chỉ được thả ra khi test xong
 
 	res := get("http://" + addr + "/slow")
@@ -118,50 +119,16 @@ func TestServeShutdownTimeout(t *testing.T) {
 	}
 }
 
-func TestReady(t *testing.T) {
-	captureLog(t)
-	backends := []struct {
-		name string
-		open func(t *testing.T) stores
-	}{
-		{"memory", func(t *testing.T) stores { return memoryStores(newTestFiles(t)) }},
-		{"postgres", func(t *testing.T) stores { return dbStores(testdb.New(t), newTestFiles(t)) }},
-	}
-	for _, b := range backends {
-		t.Run(b.name, func(t *testing.T) {
-			s := b.open(t)
-			mux := newMux(s, testTokens)
-			check := func(wantCode int, wantBody string) {
-				t.Helper()
-				rec := sendAs(mux, 0, "GET", "/ready", "")
-				if rec.Code != wantCode || rec.Body.String() != wantBody {
-					t.Errorf("/ready = %d %q, muốn %d %q", rec.Code, rec.Body, wantCode, wantBody)
-				}
-			}
-			check(http.StatusOK, "ok\n")
-			if s.db != nil {
-				s.db.Close() // mất database: không nhận request nữa, nhưng /health vẫn ok
-				check(http.StatusServiceUnavailable, "database không phản hồi\n")
-				if rec := sendAs(mux, 0, "GET", "/health", ""); rec.Code != http.StatusOK {
-					t.Errorf("/health = %d, muốn 200", rec.Code)
-				}
-			}
-			s.ready.stopping.Store(true)
-			check(http.StatusServiceUnavailable, "đang tắt\n")
-		})
-	}
-}
-
 func TestHealthcheck(t *testing.T) {
-	s := newTestStores(t)
-	srv := httptest.NewServer(newMux(s, testTokens))
+	s := newTestApp(t)
+	srv := httptest.NewServer(s.ready)
 	defer srv.Close()
 	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
 
 	if code := healthcheck(":" + port); code != 0 { // giống TASKFLOW_ADDR=:8080 trong container
 		t.Errorf("server sẵn sàng: exit code %d, muốn 0", code)
 	}
-	s.ready.stopping.Store(true)
+	s.ready.SetStopping()
 	if code := healthcheck(srv.Listener.Addr().String()); code != 1 {
 		t.Errorf("server đang tắt: exit code %d, muốn 1", code)
 	}

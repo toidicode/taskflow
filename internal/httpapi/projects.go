@@ -1,7 +1,6 @@
-package main
+package httpapi
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
-	"github.com/toidicode/taskflow/internal/user"
 )
 
 // projectInput là body của POST /projects và PUT /projects/{id}.
@@ -29,51 +27,45 @@ func (in *projectInput) validate(v validator) {
 }
 
 // listProjects liệt kê các project của user đang đăng nhập.
-func listProjects(store project.Store) http.HandlerFunc {
+func listProjects(projects *project.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		projects, err := store.List(r.Context(), userIDFrom(r.Context()))
+		list, err := projects.List(r.Context(), userIDFrom(r.Context()))
 		if err != nil {
-			storeError(w, r, err)
+			writeError(w, r, err)
 			return
 		}
-		w.Header().Set("X-Total-Count", strconv.Itoa(len(projects)))
-		writeJSON(w, http.StatusOK, projects)
+		w.Header().Set("X-Total-Count", strconv.Itoa(len(list)))
+		writeJSON(w, http.StatusOK, list)
 	}
 }
 
 // createProject tạo project mới từ body JSON, trả 201 kèm header Location.
-func createProject(store project.Store) http.HandlerFunc {
+func createProject(projects *project.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in projectInput
 		if !decodeValid(w, r, &in) {
 			return
 		}
-		p := project.New(in.Name, userIDFrom(r.Context())) // chủ project là người tạo
-		p.Description = in.Description
-		err := store.Add(r.Context(), p)
-		if errors.Is(err, user.ErrNotFound) { // khóa ngoại owner_id: token còn hạn nhưng user đã bị xóa
-			unauthorized(w, true, "tài khoản không còn tồn tại")
-			return
-		}
+		p, err := projects.Create(r.Context(), userIDFrom(r.Context()), in.Name, in.Description)
 		if err != nil {
-			storeError(w, r, err)
+			writeError(w, r, err)
 			return
 		}
-
 		w.Header().Set("Location", fmt.Sprintf("/api/v1/projects/%d", p.ID))
 		writeJSON(w, http.StatusCreated, p)
 	}
 }
 
 // getProject trả về project có ID là wildcard {id}.
-func getProject(store project.Store) http.HandlerFunc {
+func getProject(projects *project.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathID(w, r)
 		if !ok {
 			return
 		}
-		p, ok := loadProject(w, r, store, id)
-		if !ok {
+		p, err := projects.Get(r.Context(), userIDFrom(r.Context()), id)
+		if err != nil {
+			writeError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, p)
@@ -81,7 +73,7 @@ func getProject(store project.Store) http.HandlerFunc {
 }
 
 // replaceProject thay tên và mô tả của project {id} bằng body JSON (PUT), giữ nguyên chủ project.
-func replaceProject(store project.Store) http.HandlerFunc {
+func replaceProject(projects *project.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathID(w, r)
 		if !ok {
@@ -91,14 +83,9 @@ func replaceProject(store project.Store) http.HandlerFunc {
 		if !decodeValid(w, r, &in) {
 			return
 		}
-		old, ok := loadProject(w, r, store, id)
-		if !ok {
-			return
-		}
-		p := project.New(in.Name, old.OwnerID)
-		p.ID, p.Description = id, in.Description
-		if err := store.Update(r.Context(), p); err != nil {
-			storeError(w, r, err)
+		p, err := projects.Replace(r.Context(), userIDFrom(r.Context()), id, in.Name, in.Description)
+		if err != nil {
+			writeError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, p)
@@ -106,27 +93,14 @@ func replaceProject(store project.Store) http.HandlerFunc {
 }
 
 // deleteProject xóa project {id} khi project không còn task nào, trả 204; còn task thì 409.
-func deleteProject(projects project.Store, tasks task.Store) http.HandlerFunc {
+func deleteProject(projects *project.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathID(w, r)
 		if !ok {
 			return
 		}
-		if _, ok := loadProject(w, r, projects, id); !ok {
-			return
-		}
-		ts, err := tasks.List(r.Context(), task.Filter{ProjectID: id, Limit: 1}) // chỉ cần biết còn task không
-		if err != nil {
-			storeError(w, r, err)
-			return
-		}
-		if len(ts) > 0 {
-			storeError(w, r, fmt.Errorf("project #%d: %w", id, project.ErrHasTasks))
-			return
-		}
-		// task được thêm ngay sau lúc kiểm tra thì khóa ngoại của PostgreSQL vẫn chặn: store trả ErrHasTasks
-		if err := projects.Delete(r.Context(), id); err != nil {
-			storeError(w, r, err)
+		if err := projects.Delete(r.Context(), userIDFrom(r.Context()), id); err != nil {
+			writeError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -134,13 +108,14 @@ func deleteProject(projects project.Store, tasks task.Store) http.HandlerFunc {
 }
 
 // listProjectTasks liệt kê task của project {id}, lọc được theo ?status= như listTasks.
-func listProjectTasks(projects project.Store, tasks task.Store) http.HandlerFunc {
+func listProjectTasks(projects *project.Service, tasks *task.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathID(w, r)
 		if !ok {
 			return
 		}
-		if _, ok := loadProject(w, r, projects, id); !ok {
+		if _, err := projects.Get(r.Context(), userIDFrom(r.Context()), id); err != nil {
+			writeError(w, r, err)
 			return
 		}
 		writeTasks(w, r, tasks, id)

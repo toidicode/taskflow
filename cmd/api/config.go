@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/toidicode/taskflow/internal/httpapi"
 )
 
 // Config là toàn bộ cấu hình của TaskFlow API.
@@ -209,7 +211,7 @@ func (c Config) validate() error {
 	if c.CleanupEvery < 0 {
 		errs = append(errs, fmt.Errorf("cleanup-interval %v: không được âm (0 là tắt)", c.CleanupEvery))
 	}
-	if _, err := parseTrustedProxies(c.TrustedProxies); err != nil {
+	if _, err := httpapi.ParseTrustedProxies(c.TrustedProxies); err != nil {
 		errs = append(errs, fmt.Errorf("trusted-proxies %w", err))
 	}
 	if c.ShutdownDelay < 0 {

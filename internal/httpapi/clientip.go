@@ -1,4 +1,4 @@
-package main
+package httpapi
 
 import (
 	"context"
@@ -8,9 +8,9 @@ import (
 	"strings"
 )
 
-// parseTrustedProxies đọc danh sách proxy tin cậy dạng "10.0.0.5, 10.39.0.0/24":
+// ParseTrustedProxies đọc danh sách proxy tin cậy dạng "10.0.0.5, 10.39.0.0/24":
 // mỗi phần tử là một IP hoặc một dải CIDR. Chuỗi rỗng là không tin proxy nào.
-func parseTrustedProxies(s string) ([]netip.Prefix, error) {
+func ParseTrustedProxies(s string) ([]netip.Prefix, error) {
 	var res []netip.Prefix
 	for part := range strings.SplitSeq(s, ",") {
 		part = strings.TrimSpace(part)

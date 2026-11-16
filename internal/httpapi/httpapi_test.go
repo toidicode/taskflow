@@ -1,4 +1,4 @@
-package main
+package httpapi
 
 import (
 	"context"
@@ -374,7 +374,7 @@ func TestGetTaskPathValue(t *testing.T) {
 	req.SetPathValue("id", "3")
 	req = req.WithContext(context.WithValue(req.Context(), userIDKey, 1))
 	rec := httptest.NewRecorder()
-	getTask(s).ServeHTTP(rec, req)
+	getTask(s.deps(testTokens).Tasks).ServeHTTP(rec, req)
 
 	if want := `{"id":3,"project_id":1,"title":"Viết test cho API","status":"todo"}` + "\n"; rec.Body.String() != want {
 		t.Errorf("body = %q, muốn %q", rec.Body.String(), want)

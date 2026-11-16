@@ -1,4 +1,4 @@
-package main
+package httpapi
 
 import (
 	"context"
@@ -211,7 +211,7 @@ func decodePage(t *testing.T, rec *httptest.ResponseRecorder) page[task.Task] {
 // TestWriteTasksNeedsUser:handler danh sách không bao giờ trả về task của mọi người
 // khi request không có user (route bị đăng ký thiếu requireAuth).
 func TestWriteTasksNeedsUser(t *testing.T) {
-	rec := sendAs(listTasks(newTestStores(t).tasks), 0, "GET", "/api/v1/tasks", "")
+	rec := sendAs(listTasks(newTestStores(t).deps(testTokens).Tasks), 0, "GET", "/api/v1/tasks", "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("không có user: %d %s, muốn 401", rec.Code, rec.Body)
 	}

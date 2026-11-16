@@ -1,8 +1,7 @@
-package main
+package httpapi
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -14,7 +13,9 @@ import (
 	"time"
 
 	"github.com/toidicode/taskflow/internal/attachment"
+	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/storage"
+	"github.com/toidicode/taskflow/internal/task"
 )
 
 const (
@@ -38,18 +39,19 @@ var errNoFile = errors.New(`cần một file trong field "file"`)
 
 // uploadAttachment nhận một file (multipart/form-data, field "file") và đính kèm vào task {id}.
 // Body được đọc dạng stream, file được ghi thẳng vào storage, không giữ cả file trong bộ nhớ.
-func uploadAttachment(s stores) http.HandlerFunc {
+func uploadAttachment(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathID(w, r)
 		if !ok {
 			return
 		}
 		// kiểm tra quyền trước khi đọc body: người ngoài không đẩy được 10 MB nào vào server
-		t, p, ok := loadTask(w, r, s, id)
-		if !ok {
+		me := userIDFrom(r.Context())
+		t, p, err := d.Tasks.Get(r.Context(), me, id)
+		if err != nil {
+			writeError(w, r, err)
 			return
 		}
-		me := userIDFrom(r.Context())
 		if !attachment.CanUpload(me, p, t) {
 			forbidden(w, "không được đính kèm file vào task này")
 			return
@@ -98,9 +100,9 @@ func uploadAttachment(s stores) http.HandlerFunc {
 			UploadedBy:  me,
 		}
 		content := io.MultiReader(bytes.NewReader(head), part) // ghép lại 512 byte đã đọc với phần còn lại
-		a.Size, err = s.files.Save(r.Context(), a.StoredName, readErrors{io.LimitReader(content, maxUploadBytes+1)})
+		a.Size, err = d.Files.Save(r.Context(), a.StoredName, readErrors{io.LimitReader(content, maxUploadBytes+1)})
 		if err == nil && a.Size > maxUploadBytes {
-			removeFiles(r, s.files, *a)
+			removeFiles(r, d.Files, *a)
 			err = readError{&http.MaxBytesError{Limit: maxUploadBytes}}
 		}
 		if _, ok := errors.AsType[readError](err); ok {
@@ -108,13 +110,13 @@ func uploadAttachment(s stores) http.HandlerFunc {
 			return
 		}
 		if err != nil {
-			storeError(w, r, err)
+			writeError(w, r, err)
 			return
 		}
 
-		if err := s.attachments.Add(r.Context(), a); err != nil {
-			removeFiles(r, s.files, *a) // không để lại file mà không hàng nào trỏ tới
-			storeError(w, r, err)       // task vừa bị xóa: 404
+		if err := d.Attachments.Add(r.Context(), a); err != nil {
+			removeFiles(r, d.Files, *a) // không để lại file mà không hàng nào trỏ tới
+			writeError(w, r, err)       // task vừa bị xóa: 404
 			return
 		}
 		w.Header().Set("Location", fmt.Sprintf("/api/v1/attachments/%d", a.ID))
@@ -190,18 +192,19 @@ func extendDeadlines(w http.ResponseWriter, r *http.Request) {
 }
 
 // listAttachments trả về các file đính kèm của task {id}.
-func listAttachments(s stores) http.HandlerFunc {
+func listAttachments(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathID(w, r)
 		if !ok {
 			return
 		}
-		if _, _, ok := loadTask(w, r, s, id); !ok {
+		if _, _, err := d.Tasks.Get(r.Context(), userIDFrom(r.Context()), id); err != nil {
+			writeError(w, r, err)
 			return
 		}
-		list, err := s.attachments.List(r.Context(), id)
+		list, err := d.Attachments.List(r.Context(), id)
 		if err != nil {
-			storeError(w, r, err)
+			writeError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, list)
@@ -209,19 +212,19 @@ func listAttachments(s stores) http.HandlerFunc {
 }
 
 // downloadAttachment gửi nội dung file {id} cho người xem được task chứa nó.
-func downloadAttachment(s stores) http.HandlerFunc {
+func downloadAttachment(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathID(w, r)
 		if !ok {
 			return
 		}
-		a, _, _, ok := loadAttachment(w, r, s, id)
+		a, _, _, ok := loadAttachment(w, r, d, id)
 		if !ok {
 			return
 		}
-		f, err := s.files.Open(r.Context(), a.StoredName)
+		f, err := d.Files.Open(r.Context(), a.StoredName)
 		if err != nil { // có hàng mà không có file: lỗi của server
-			storeError(w, r, fmt.Errorf("mở file của attachment #%d: %w", id, err))
+			writeError(w, r, fmt.Errorf("mở file của attachment #%d: %w", id, err))
 			return
 		}
 		defer f.Close()
@@ -245,13 +248,13 @@ func contentDisposition(name string) string {
 }
 
 // deleteAttachment xóa file {id}: chủ project xóa được mọi file, người khác chỉ xóa file mình upload.
-func deleteAttachment(s stores) http.HandlerFunc {
+func deleteAttachment(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathID(w, r)
 		if !ok {
 			return
 		}
-		a, t, p, ok := loadAttachment(w, r, s, id)
+		a, t, p, ok := loadAttachment(w, r, d, id)
 		if !ok {
 			return
 		}
@@ -261,22 +264,39 @@ func deleteAttachment(s stores) http.HandlerFunc {
 		}
 		// xóa hàng trước, file sau: bước sau lỗi thì chỉ thừa một file không ai thấy;
 		// làm ngược lại thì lỗi để lại một hàng trỏ tới file không còn
-		if err := s.attachments.Delete(r.Context(), id); err != nil {
-			storeError(w, r, err)
+		if err := d.Attachments.Delete(r.Context(), id); err != nil {
+			writeError(w, r, err)
 			return
 		}
-		removeFiles(r, s.files, a)
+		removeFiles(r, d.Files, a)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-// removeFiles xóa nội dung các file đính kèm khỏi storage. Lỗi chỉ được ghi log: hàng trong
-// database đã bị xóa (hoặc chưa từng có), file sót lại chỉ tốn chỗ, không ai tải được.
+// removeFiles xóa nội dung các file đính kèm khỏi storage, lỗi chỉ được ghi log (attachment.Files.Remove).
 func removeFiles(r *http.Request, files storage.Storage, list ...attachment.Attachment) {
-	ctx := context.WithoutCancel(r.Context()) // client ngắt kết nối thì vẫn phải dọn file
-	for _, a := range list {
-		if err := files.Remove(ctx, a.StoredName); err != nil {
-			requestLogger(r).Error("xóa file đính kèm", "stored_name", a.StoredName, "err", err)
-		}
+	names := make([]string, len(list))
+	for i, a := range list {
+		names[i] = a.StoredName
 	}
+	attachment.Files{Storage: files}.Remove(r.Context(), names...)
+}
+
+// loadAttachment đọc file đính kèm id cùng task và project chứa nó. User không được xem task
+// thì ghi response 404 giống hệt khi không có file (không lộ cả ID của task) rồi trả về false.
+func loadAttachment(w http.ResponseWriter, r *http.Request, d Deps, id int) (attachment.Attachment, task.Task, project.Project, bool) {
+	a, err := d.Attachments.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, r, err)
+		return attachment.Attachment{}, task.Task{}, project.Project{}, false
+	}
+	t, p, err := d.Tasks.Get(r.Context(), userIDFrom(r.Context()), a.TaskID)
+	if errors.Is(err, task.ErrNotFound) {
+		err = fmt.Errorf("attachment #%d: %w", id, attachment.ErrNotFound)
+	}
+	if err != nil {
+		writeError(w, r, err)
+		return attachment.Attachment{}, task.Task{}, project.Project{}, false
+	}
+	return a, t, p, true
 }
