@@ -1,0 +1,6 @@
+# cấu hình cho `redocly lint` (mặc định đọc file này trong thư mục hiện tại)
+extends:
+  - recommended
+rules:
+  info-license: off           # API của TaskFlow, không phát hành cho bên ngoài theo giấy phép nào
+  operation-4xx-response: off # /health, /ready không có lỗi 4xx

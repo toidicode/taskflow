@@ -90,3 +90,25 @@ func TestRedisDown(t *testing.T) {
 		t.Errorf("Stats = %+v, muốn 2 lỗi", st)
 	}
 }
+
+// TestOptions: timeout nào URL đã ghi thì giữ nguyên, timeout nào thiếu thì đặt giá trị ngắn, từng cái riêng.
+func TestOptions(t *testing.T) {
+	tests := []struct {
+		url         string
+		read, write time.Duration
+	}{
+		{"redis://localhost:6379/0", 200 * time.Millisecond, 200 * time.Millisecond},
+		{"redis://localhost:6379/0?read_timeout=1s", time.Second, 200 * time.Millisecond},
+		{"redis://localhost:6379/0?write_timeout=2s", 200 * time.Millisecond, 2 * time.Second},
+	}
+	for _, tt := range tests {
+		opt, err := cache.Options(tt.url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if opt.ReadTimeout != tt.read || opt.WriteTimeout != tt.write || !opt.ContextTimeoutEnabled {
+			t.Errorf("%s: read %v, write %v, context %v; muốn %v, %v, true",
+				tt.url, opt.ReadTimeout, opt.WriteTimeout, opt.ContextTimeoutEnabled, tt.read, tt.write)
+		}
+	}
+}

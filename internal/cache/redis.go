@@ -43,6 +43,8 @@ func Options(url string) (*redis.Options, error) {
 	}
 	if opt.ReadTimeout == 0 {
 		opt.ReadTimeout = 200 * time.Millisecond
+	}
+	if opt.WriteTimeout == 0 {
 		opt.WriteTimeout = 200 * time.Millisecond
 	}
 	if opt.PoolTimeout == 0 {
@@ -51,8 +53,10 @@ func Options(url string) (*redis.Options, error) {
 	if opt.MaxRetries == 0 {
 		opt.MaxRetries = -1 // không thử lại lệnh lỗi: đọc database còn nhanh hơn
 	}
-	opt.DialerRetries = 1            // mặc định thử kết nối 5 lần mỗi lần cần kết nối mới
-	opt.ContextTimeoutEnabled = true // lệnh dừng khi context của request bị hủy
+	opt.DialerRetries = 1 // mặc định thử kết nối 5 lần mỗi lần cần kết nối mới
+	// áp cả deadline của context (nếu sớm hơn ReadTimeout/WriteTimeout) vào lệnh; chỉ deadline:
+	// hủy một context không có deadline không cắt được lệnh đang chờ Redis trả lời
+	opt.ContextTimeoutEnabled = true
 	return opt, nil
 }
 

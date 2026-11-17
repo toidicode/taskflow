@@ -91,11 +91,11 @@ func signUp(t *testing.T, srv *httptest.Server, name, email, password string) *c
 	return &client{t: t, srv: srv, token: tok.AccessToken}
 }
 
-// e2eLimits là giới hạn request khi chạy kịch bản: đủ rộng cho các bước bình thường,
-// riêng đăng nhập theo email chỉ 2 lần mỗi phút để thử 429.
+// riêng đăng nhập theo email chỉ 2 lần mỗi giờ để thử 429 (với 2 lần mỗi phút, token hồi lại sau 30 giây:
+// một lần chạy -race dưới tải nặng từng thấy lần đoán thứ ba được đi qua).
 var e2eLimits = Config{
 	RateAuthIP:     ratelimit.Limit{N: 10, Period: time.Minute},
-	RateLoginEmail: ratelimit.Limit{N: 2, Period: time.Minute},
+	RateLoginEmail: ratelimit.Limit{N: 2, Period: time.Hour},
 	RateUser:       ratelimit.Limit{N: 100, Period: time.Minute},
 }
 
@@ -140,6 +140,7 @@ func TestEndToEnd(t *testing.T) {
 				}
 			})
 			t.Cleanup(srv.Close)
+			checkContract(t, srv) // mọi request, response bên dưới phải khớp api/openapi.yaml
 
 			an := signUp(t, srv, "An", "an@example.com", "mat-khau-cua-an")
 			binh := signUp(t, srv, "Bình", "binh@example.com", "mat-khau-cua-binh")

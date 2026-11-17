@@ -1,0 +1,738 @@
+openapi: 3.1.1
+info:
+  title: TaskFlow API
+  version: 1.0.0
+  summary: API quản lý project và task của series Học Golang trên toidicode.com.
+  description: |
+    Mọi route dưới `/api/v1` cần access token (`Authorization: Bearer <token>`), trừ đăng ký và đăng nhập.
+    Lấy token bằng `POST /api/v1/auth/login`.
+
+    **Lỗi** luôn là JSON `{"error": "..."}`; lỗi validate có thêm `fields` (tên field → thông báo).
+
+    **Rate limit**: request bị giới hạn theo IP (đăng ký, đăng nhập), theo email (đăng nhập) và theo user
+    (mọi route cần đăng nhập). Response của các route đó có header `RateLimit-Policy` và `RateLimit`
+    (draft-ietf-httpapi-ratelimit-headers-11); vượt giới hạn thì nhận `429` kèm `Retry-After`.
+servers:
+  - url: /
+    description: Cùng địa chỉ với trang tài liệu này
+tags:
+  - name: auth
+    description: Đăng ký, đăng nhập, user hiện tại
+  - name: projects
+    description: Project của user đang đăng nhập
+  - name: tasks
+    description: Task, tag và phân trang
+  - name: attachments
+    description: File đính kèm của task
+  - name: health
+    description: Kiểm tra trạng thái server, dành cho Docker và load balancer
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness, process còn sống
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: Server đang chạy
+          content:
+            text/plain:
+              schema: {type: string, examples: ["ok\n"]}
+
+  /ready:
+    get:
+      tags: [health]
+      summary: Readiness, server sẵn sàng nhận request (database trả lời được)
+      operationId: ready
+      security: []
+      responses:
+        "200":
+          description: Sẵn sàng
+          content:
+            text/plain:
+              schema: {type: string}
+        "503":
+          description: Đang tắt hoặc database không phản hồi
+          content:
+            text/plain:
+              schema: {type: string}
+
+  /api/v1/auth/register:
+    post:
+      tags: [auth]
+      summary: Đăng ký tài khoản
+      operationId: register
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RegisterInput"}
+      responses:
+        "201":
+          description: Đã tạo tài khoản
+          headers:
+            Location: {$ref: "#/components/headers/Location"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/User"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "409":
+          description: Email đã được đăng ký
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Đăng nhập, nhận access token
+      description: Giới hạn theo IP và theo email (cộng dồn từ mọi IP).
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LoginInput"}
+      responses:
+        "200":
+          description: Đăng nhập thành công
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Token"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401":
+          description: Sai email hoặc mật khẩu
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /api/v1/me:
+    get:
+      tags: [auth]
+      summary: User đang đăng nhập
+      operationId: getMe
+      responses:
+        "200":
+          description: User của access token
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/User"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /api/v1/projects:
+    get:
+      tags: [projects]
+      summary: Danh sách project của user đang đăng nhập
+      operationId: listProjects
+      responses:
+        "200":
+          description: Mọi project của user (không phân trang)
+          headers:
+            X-Total-Count:
+              description: Số project
+              schema: {type: integer}
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/Project"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+    post:
+      tags: [projects]
+      summary: Tạo project, user đang đăng nhập là chủ
+      operationId: createProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProjectInput"}
+      responses:
+        "201":
+          description: Đã tạo
+          headers:
+            Location: {$ref: "#/components/headers/Location"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Project"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /api/v1/projects/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [projects]
+      summary: Xem một project
+      operationId: getProject
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Project"}
+        "400": {$ref: "#/components/responses/BadParams"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+    put:
+      tags: [projects]
+      summary: Thay tên và mô tả của project (chỉ chủ project)
+      operationId: replaceProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProjectInput"}
+      responses:
+        "200":
+          description: Project sau khi sửa
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Project"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+    delete:
+      tags: [projects]
+      summary: Xóa project không còn task nào
+      operationId: deleteProject
+      responses:
+        "204": {description: Đã xóa}
+        "400": {$ref: "#/components/responses/BadParams"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409":
+          description: Project vẫn còn task
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /api/v1/projects/{id}/tasks:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [projects, tasks]
+      summary: Task của một project, có phân trang
+      operationId: listProjectTasks
+      parameters:
+        - $ref: "#/components/parameters/Status"
+        - $ref: "#/components/parameters/Tag"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200": {$ref: "#/components/responses/TaskPage"}
+        "400": {$ref: "#/components/responses/BadParams"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /api/v1/tasks:
+    get:
+      tags: [tasks]
+      summary: Task user được xem (của project mình hoặc được giao), có phân trang
+      operationId: listTasks
+      parameters:
+        - $ref: "#/components/parameters/Status"
+        - $ref: "#/components/parameters/Tag"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200": {$ref: "#/components/responses/TaskPage"}
+        "400": {$ref: "#/components/responses/BadParams"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+    post:
+      tags: [tasks]
+      summary: Tạo task trong một project của mình
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateTaskInput"}
+      responses:
+        "201":
+          description: Đã tạo, status là todo
+          headers:
+            Location: {$ref: "#/components/headers/Location"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Task"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /api/v1/tasks/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [tasks]
+      summary: Xem một task
+      operationId: getTask
+      responses:
+        "200":
+          description: Task
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Task"}
+        "400": {$ref: "#/components/responses/BadParams"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+    patch:
+      tags: [tasks]
+      summary: Sửa một phần task
+      description: Chỉ sửa các field có trong body. Người được giao chỉ được đổi `status`.
+      operationId: updateTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UpdateTaskInput"}
+      responses:
+        "200":
+          description: Task sau khi sửa
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Task"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+    delete:
+      tags: [tasks]
+      summary: Xóa task cùng file đính kèm (chỉ chủ project)
+      operationId: deleteTask
+      responses:
+        "204": {description: Đã xóa}
+        "400": {$ref: "#/components/responses/BadParams"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /api/v1/tasks/{id}/tags:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [tasks]
+      summary: Gắn một tag vào task (chỉ chủ project)
+      operationId: addTaskTag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: {type: string, maxLength: 30, description: "Được chuẩn hóa: bỏ khoảng trắng hai đầu, chữ thường"}
+      responses:
+        "200":
+          description: Task sau khi gắn tag
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Task"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /api/v1/tasks/{id}/tags/{name}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: name
+        in: path
+        required: true
+        schema: {type: string}
+    delete:
+      tags: [tasks]
+      summary: Gỡ tag khỏi task, trả 204 kể cả khi task không có tag đó
+      operationId: removeTaskTag
+      responses:
+        "204": {description: Đã gỡ}
+        "400": {$ref: "#/components/responses/BadParams"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /api/v1/tasks/{id}/attachments:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [attachments]
+      summary: File đính kèm của task
+      operationId: listAttachments
+      responses:
+        "200":
+          description: Danh sách file (không phân trang)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/Attachment"}
+        "400": {$ref: "#/components/responses/BadParams"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+    post:
+      tags: [attachments]
+      summary: Đính kèm một file (tối đa 10 MB) vào task
+      description: |
+        Nhận ảnh PNG, JPEG, GIF, WebP, PDF và text. Loại file được nhận ra từ nội dung,
+        không theo `Content-Type` hay đuôi file client gửi.
+      operationId: uploadAttachment
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  contentMediaType: application/octet-stream
+      responses:
+        "201":
+          description: Đã lưu file
+          headers:
+            Location: {$ref: "#/components/headers/Location"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Attachment"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "408":
+          description: Client gửi file quá chậm
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /api/v1/attachments/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [attachments]
+      summary: Tải nội dung file
+      operationId: downloadAttachment
+      responses:
+        "200":
+          description: Nội dung file, `Content-Type` là loại server nhận ra lúc upload
+          headers:
+            Content-Disposition:
+              description: Luôn là `attachment` kèm tên file gốc
+              schema: {type: string}
+          content:
+            "*/*":
+              schema: {type: string, contentMediaType: application/octet-stream}
+        "400": {$ref: "#/components/responses/BadParams"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+    delete:
+      tags: [attachments]
+      summary: Xóa file (chủ project hoặc người upload)
+      operationId: deleteAttachment
+      responses:
+        "204": {description: Đã xóa}
+        "400": {$ref: "#/components/responses/BadParams"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token từ `POST /api/v1/auth/login`, mặc định sống 15 phút.
+
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: {type: integer, minimum: 1}
+    Status:
+      name: status
+      in: query
+      schema: {$ref: "#/components/schemas/Status"}
+    Tag:
+      name: tag
+      in: query
+      description: Chỉ lấy task có tag này
+      schema: {type: string}
+    Limit:
+      name: limit
+      in: query
+      description: Số task mỗi trang
+      schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+    Cursor:
+      name: cursor
+      in: query
+      description: Giá trị `next_cursor` của trang trước. Client không cần biết bên trong là gì.
+      schema: {type: string}
+
+  headers:
+    Location:
+      description: Đường dẫn của tài nguyên vừa tạo
+      schema: {type: string}
+    RateLimit:
+      description: 'Trạng thái của từng luật, VD `"login-ip";r=3;t=5` (r: còn lại; t: trong t giây tới chỉ đi được tối đa r request, không có nghĩa là đầy lại sau t giây)'
+      schema: {type: string}
+    RateLimitPolicy:
+      description: 'Các luật áp dụng, VD `"login-ip";q=10;w=60` (q request trong w giây)'
+      schema: {type: string}
+
+  responses:
+    BadRequest:
+      description: Body không đọc được (JSON sai cú pháp, sai kiểu, field lạ) hoặc tham số trên URL sai
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/BadRequestError"}
+    BadParams:
+      description: Tham số trên path hoặc query không hợp lệ
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ValidationError"}
+    Unauthorized:
+      description: Thiếu access token, token sai hoặc đã hết hạn
+      headers:
+        WWW-Authenticate:
+          required: true
+          schema: {type: string, examples: ['Bearer realm="taskflow", error="invalid_token"']}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Forbidden:
+      description: Xem được tài nguyên nhưng không được làm việc này
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotFound:
+      description: Không có, hoặc user không được xem (hai trường hợp trả lời giống hệt nhau)
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    TooLarge:
+      description: Body vượt giới hạn (JSON 1 MB, file 10 MB)
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    UnsupportedMediaType:
+      description: Sai `Content-Type` (cần `application/json`, upload cần `multipart/form-data`)
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Invalid:
+      description: Dữ liệu không hợp lệ, lỗi theo từng field
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ValidationError"}
+    TooManyRequests:
+      description: Vượt giới hạn request, thử lại sau `Retry-After` giây
+      headers:
+        Retry-After:
+          required: true
+          description: Số giây phải chờ
+          schema: {type: integer, minimum: 1}
+        RateLimit: {$ref: "#/components/headers/RateLimit"}
+        RateLimit-Policy: {$ref: "#/components/headers/RateLimitPolicy"}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    TaskPage:
+      description: Một trang task, sắp theo ID tăng dần
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [data]
+            properties:
+              data:
+                type: array
+                items: {$ref: "#/components/schemas/Task"}
+              next_cursor:
+                type: string
+                description: Không có nghĩa là trang cuối
+
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error: {type: string, examples: ["task #42: không tìm thấy"]}
+    ValidationError:
+      type: object
+      additionalProperties: false
+      required: [error, fields]
+      properties:
+        error: {type: string, examples: ["dữ liệu không hợp lệ"]}
+        fields:
+          type: object
+          additionalProperties: {type: string}
+          examples: [{title: "không được để trống"}]
+    BadRequestError:
+      description: 'Lỗi đọc body: {"error"}; tham số trên URL sai: {"error", "fields"}'
+      oneOf:
+        - $ref: "#/components/schemas/Error"
+        - $ref: "#/components/schemas/ValidationError"
+    Status:
+      type: string
+      enum: [todo, doing, done]
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, email, name, created_at]
+      properties:
+        id: {type: integer}
+        email: {type: string, format: email}
+        name: {type: string}
+        created_at: {type: string, format: date-time}
+    RegisterInput:
+      type: object
+      additionalProperties: false
+      required: [email, name, password]
+      properties:
+        email: {type: string, format: email}
+        name: {type: string, minLength: 1, maxLength: 100}
+        password: {type: string, minLength: 8, description: "Tối thiểu 8 ký tự, tối đa 72 byte"}
+    LoginInput:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email: {type: string}
+        password: {type: string}
+    Token:
+      type: object
+      additionalProperties: false
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token: {type: string}
+        token_type: {type: string, const: Bearer}
+        expires_in: {type: integer, description: Số giây tới khi token hết hạn}
+    Project:
+      type: object
+      additionalProperties: false
+      required: [id, name, owner_id]
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        description: {type: string}
+        owner_id: {type: integer}
+    ProjectInput:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        description: {type: string, maxLength: 2000}
+    Task:
+      type: object
+      additionalProperties: false
+      required: [id, project_id, title, status]
+      properties:
+        id: {type: integer}
+        project_id: {type: integer}
+        title: {type: string}
+        description: {type: string}
+        status: {$ref: "#/components/schemas/Status"}
+        assignee_id: {type: integer, description: Không có nghĩa là chưa giao cho ai}
+        due_date: {type: string, format: date-time}
+        completed_at: {type: string, format: date-time}
+        tags:
+          type: array
+          items: {type: string}
+    CreateTaskInput:
+      type: object
+      additionalProperties: false
+      required: [project_id, title]
+      properties:
+        project_id: {type: integer, minimum: 1}
+        title: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 2000}
+        assignee_id: {type: integer, minimum: 0, description: 0 hoặc không gửi là chưa giao cho ai}
+        due_date: {type: string, format: date-time}
+        tags:
+          type: array
+          maxItems: 10
+          items: {type: string, maxLength: 30}
+    UpdateTaskInput:
+      type: object
+      additionalProperties: false
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 2000}
+        status: {$ref: "#/components/schemas/Status"}
+        assignee_id: {type: integer, minimum: 0, description: 0 là bỏ giao}
+        due_date:
+          type: [string, "null"]
+          format: date-time
+          description: null là xóa hạn
+        tags:
+          type: array
+          maxItems: 10
+          items: {type: string, maxLength: 30}
+          description: Thay toàn bộ tag, [] là xóa hết
+    Attachment:
+      type: object
+      additionalProperties: false
+      required: [id, task_id, name, content_type, size, created_at]
+      properties:
+        id: {type: integer}
+        task_id: {type: integer}
+        name: {type: string}
+        content_type: {type: string, examples: ["application/pdf"]}
+        size: {type: integer, description: Byte}
+        uploaded_by: {type: integer, description: Không có khi người upload đã bị xóa}
+        created_at: {type: string, format: date-time}

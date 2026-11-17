@@ -71,6 +71,8 @@ func newEngine(trusted []netip.Prefix) *gin.Engine {
 func routes(r *gin.Engine, d Deps) {
 	get(r, "/health", health)            // liveness: process còn sống, không hỏi database
 	get(r, "/ready", gin.WrapH(d.Ready)) // readiness: http.Handler sẵn có, dùng lại qua gin.WrapH
+	get(r, "/openapi.yaml", openAPISpec) // tài liệu API (api/openapi.yaml)
+	get(r, "/docs", docs)                // Swagger UI đọc /openapi.yaml
 
 	rl, lim := d.RateLimit, d.RateLimit.Limits
 	v1 := r.Group("/api/v1")

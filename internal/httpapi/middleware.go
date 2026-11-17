@@ -113,7 +113,8 @@ func cors(origin string) gin.HandlerFunc {
 			c.AbortWithStatus(http.StatusNoContent) // trả lời luôn, không tới route nào
 			return
 		}
-		// cho JavaScript đọc các header này (mặc định chỉ đọc được vài header cơ bản)
-		h.Set("Access-Control-Expose-Headers", "Location, X-Request-ID, X-Total-Count")
+		// cho JavaScript đọc các header này (mặc định chỉ đọc được vài header cơ bản),
+		// kể cả các header rate limit mà openapi.yaml hứa với frontend
+		h.Set("Access-Control-Expose-Headers", "Location, X-Request-ID, X-Total-Count, Retry-After, RateLimit, RateLimit-Policy")
 	}
 }
