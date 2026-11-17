@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+// Package notify.v1: notification service của TaskFlow (Bài 49).
+// Quy tắc: không đổi số field, không đổi kiểu field; field bỏ đi thì "reserved" số và tên.
+package notify.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/toidicode/taskflow/internal/gen/notify/v1;notifyv1";
+
+// NotificationService gửi thông báo tới user của TaskFlow.
+service NotificationService {
+  // Send gửi một thông báo tới mọi user trong user_ids.
+  rpc Send(SendRequest) returns (SendResponse);
+}
+
+// Channel là kênh gửi thông báo.
+enum Channel {
+  // Không chọn: server dùng kênh mặc định (log).
+  CHANNEL_UNSPECIFIED = 0;
+  CHANNEL_LOG = 1;
+  CHANNEL_EMAIL = 2;
+}
+
+message SendRequest {
+  // Người nhận, ít nhất một.
+  repeated int64 user_ids = 1;
+  int64 task_id = 2;
+  string title = 3;
+  Channel channel = 4;
+
+  // Loại thông báo: đúng một trong các field dưới đây.
+  oneof event {
+    TaskDone task_done = 10;
+    Deadline deadline = 11;
+  }
+}
+
+// TaskDone: task đã chuyển sang done.
+message TaskDone {
+  // User đã chuyển task sang done.
+  int64 done_by = 1;
+}
+
+// Deadline: task sắp tới hạn.
+message Deadline {
+  google.protobuf.Timestamp due_date = 1;
+}
+
+message SendResponse {
+  // Số người nhận đã gửi được.
+  int32 delivered = 1;
+}

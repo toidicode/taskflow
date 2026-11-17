@@ -1,0 +1,10 @@
+# Cấu hình buf (Bài 49): module proto nằm trong thư mục proto/.
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE
