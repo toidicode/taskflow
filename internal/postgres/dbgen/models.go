@@ -33,14 +33,15 @@ type Tag struct {
 }
 
 type Task struct {
-	ID          int64
-	ProjectID   int64
-	Title       string
-	Description string
-	Status      string
-	AssigneeID  sql.NullInt64
-	DueDate     sql.NullTime
-	CompletedAt sql.NullTime
+	ID              int64
+	ProjectID       int64
+	Title           string
+	Description     string
+	Status          string
+	AssigneeID      sql.NullInt64
+	DueDate         sql.NullTime
+	CompletedAt     sql.NullTime
+	RemindedDueDate sql.NullTime
 }
 
 type TaskTag struct {

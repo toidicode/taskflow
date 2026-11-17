@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/toidicode/taskflow/internal/project"
 )
@@ -55,6 +56,11 @@ type Store interface {
 	// RemoveTag gỡ tag name khỏi task taskID, task không có tag đó thì không làm gì.
 	// Lỗi wrap ErrNotFound khi không có task đó.
 	RemoveTag(ctx context.Context, taskID int, name string) error
+	// DueSoon trả về các task chưa xong có hạn trong (from, to] mà chưa được nhắc cho đúng hạn
+	// đó (MarkReminded), sắp xếp theo hạn.
+	DueSoon(ctx context.Context, from, to time.Time) ([]Task, error)
+	// MarkReminded ghi lại đã nhắc task id cho hạn due. Không có task đó thì không làm gì.
+	MarkReminded(ctx context.Context, id int, due time.Time) error
 }
 
 // MemoryStore lưu task trong bộ nhớ, dùng được từ nhiều goroutine.
@@ -64,7 +70,8 @@ type MemoryStore struct {
 	mu        sync.RWMutex // bảo vệ các field bên dưới
 	tasks     map[int]Task
 	nextID    int
-	projectOf ProjectFunc // tìm project của task khi lọc theo Filter.VisibleTo
+	projectOf ProjectFunc       // tìm project của task khi lọc theo Filter.VisibleTo
+	reminded  map[int]time.Time // task ID → hạn đã nhắc
 }
 
 // ProjectFunc trả về project có ID projectID, false khi không có project đó.
@@ -96,8 +103,9 @@ var _ Store = (*MemoryStore)(nil)
 // NewMemoryStore tạo một store rỗng, task đầu tiên có ID là 1.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		tasks:  make(map[int]Task),
-		nextID: 1,
+		tasks:    make(map[int]Task),
+		nextID:   1,
+		reminded: make(map[int]time.Time),
 	}
 }
 
@@ -143,6 +151,7 @@ func (s *MemoryStore) Delete(ctx context.Context, id int) error {
 		return fmt.Errorf("task #%d: %w", id, ErrNotFound)
 	}
 	delete(s.tasks, id)
+	delete(s.reminded, id)
 	return nil
 }
 
@@ -185,6 +194,30 @@ func (s *MemoryStore) RemoveTag(ctx context.Context, taskID int, name string) er
 	}
 	t.Tags = slices.DeleteFunc(slices.Clone(t.Tags), func(tag string) bool { return tag == name })
 	s.tasks[taskID] = t
+	return nil
+}
+
+func (s *MemoryStore) DueSoon(ctx context.Context, from, to time.Time) ([]Task, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var tasks []Task
+	for t := range maps.Values(s.tasks) {
+		if !t.IsDone() && t.DueDate.After(from) && !t.DueDate.After(to) && !s.reminded[t.ID].Equal(t.DueDate) {
+			tasks = append(tasks, clone(t))
+		}
+	}
+	slices.SortFunc(tasks, func(a, b Task) int {
+		return cmp.Or(a.DueDate.Compare(b.DueDate), cmp.Compare(a.ID, b.ID))
+	})
+	return tasks, nil
+}
+
+func (s *MemoryStore) MarkReminded(ctx context.Context, id int, due time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tasks[id]; ok {
+		s.reminded[id] = due
+	}
 	return nil
 }
 

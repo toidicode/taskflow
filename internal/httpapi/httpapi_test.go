@@ -18,6 +18,7 @@ import (
 
 	"github.com/toidicode/taskflow/internal/auth"
 	"github.com/toidicode/taskflow/internal/jobs"
+	"github.com/toidicode/taskflow/internal/notify"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/storage"
 	"github.com/toidicode/taskflow/internal/task"
@@ -49,13 +50,17 @@ func newTestFiles(t *testing.T) *storage.Disk {
 	return files
 }
 
-// withTestJobs gắn vào s một dispatcher một worker (dừng khi test xong) và một recordNotifier.
+// withTestJobs gắn vào s một hàng đợi trong bộ nhớ một worker (dừng khi test xong) và một
+// recordNotifier nhận các job thông báo.
 func withTestJobs(t *testing.T, s stores) stores {
 	t.Helper()
-	s.jobs = jobs.New(jobs.Options{Workers: 1, Logger: slog.New(slog.DiscardHandler)})
-	s.jobs.Start()
-	t.Cleanup(func() { s.jobs.Stop(context.Background()) })
 	s.notifier = &recordNotifier{}
+	s.queue = jobs.NewLocal(jobs.Options{Workers: 1, Logger: slog.New(slog.DiscardHandler)})
+	for _, h := range notify.Handlers(s.notifier) {
+		s.queue.Handle(h)
+	}
+	s.queue.Start()
+	t.Cleanup(func() { s.queue.Stop(context.Background()) })
 	return s
 }
 

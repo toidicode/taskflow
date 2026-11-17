@@ -34,3 +34,16 @@ WHERE id = $1;
 -- name: DeleteTask :execrows
 DELETE FROM tasks
 WHERE id = $1;
+
+-- name: ListDueTasks :many
+-- Task chưa xong có hạn trong (due_after, due_before] và chưa được nhắc cho đúng hạn đó.
+SELECT * FROM tasks
+WHERE status <> 'done'
+  AND due_date > @due_after AND due_date <= @due_before
+  AND reminded_due_date IS DISTINCT FROM due_date
+ORDER BY due_date, id;
+
+-- name: MarkTaskReminded :exec
+UPDATE tasks
+SET reminded_due_date = @due_date
+WHERE id = @id;

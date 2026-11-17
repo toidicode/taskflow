@@ -28,7 +28,7 @@ type stores struct {
 	users       user.Store
 	attachments attachment.Store
 	files       storage.Storage
-	jobs        *jobs.Dispatcher
+	queue       *jobs.Local
 	notifier    notify.Notifier
 	db          *sql.DB // nil với store trong bộ nhớ
 	ready       *Readiness
@@ -66,7 +66,7 @@ func dbStores(db *sql.DB, files storage.Storage) stores {
 // deps nối các store thành service, giống app.handler trong cmd/api.
 func (s stores) deps(tokens *auth.Tokens) Deps {
 	tasks := task.NewService(s.tasks, s.projects, s.users,
-		attachment.Files{Store: s.attachments, Storage: s.files}, s.jobs, s.notifier, s.hub)
+		attachment.Files{Store: s.attachments, Storage: s.files}, s.queue, s.hub)
 	return Deps{
 		Tasks:       tasks,
 		Projects:    project.NewService(s.projects, tasks),

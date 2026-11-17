@@ -17,6 +17,7 @@ import (
 
 	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/cache"
+	"github.com/toidicode/taskflow/internal/jobs"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/ratelimit"
 	"github.com/toidicode/taskflow/internal/task"
@@ -120,9 +121,14 @@ func TestEndToEnd(t *testing.T) {
 			a.projects = project.NewCachedStore(a.projects, cache.NewMemory(), project.CacheOptions{})
 			return a
 		}},
-		{"postgres+redis", func(t *testing.T) *app { // cache, rate limit và event realtime đều qua Redis
+		{"postgres+redis", func(t *testing.T) *app { // cache, rate limit, event realtime và hàng đợi job đều qua Redis
 			rc, prefix := testredis.New(t)
 			a := dbApp(testdb.New(t), newTestFiles(t))
+			q, err := jobs.NewRedis(testredis.URL(), jobs.RedisOptions{Concurrency: 1, QueuePrefix: prefix})
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.queue = q
 			a.projects = project.NewCachedStore(a.projects, rc, project.CacheOptions{Prefix: prefix})
 			a.rateLimit = rateLimit(nil, e2eLimits)
 			a.rateLimit.Limiter = ratelimit.NewRedis(rc.Client(), prefix+"ratelimit:")
@@ -220,11 +226,8 @@ func TestEndToEnd(t *testing.T) {
 				t.Errorf("tải file: %q, muốn %q", got, content)
 			}
 
-			// chờ worker gửi xong thông báo bằng Stop, không đoán thời gian bằng time.Sleep
-			if err := s.jobs.Stop(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			sent := s.notifier.(*recordNotifier).sent
+			// chờ worker gửi xong thông báo (bản postgres+redis: job đi qua Redis, chạy ở worker của asynq)
+			sent := s.notifier.(*recordNotifier).waitSent(t, 1)
 			if len(sent) != 1 || sent[0].TaskID != tk.ID || sent[0].DoneBy != 2 || !slices.Equal(sent[0].To, []int{1}) {
 				t.Errorf("thông báo: %+v, muốn một thông báo task #%d cho An", sent, tk.ID)
 			}

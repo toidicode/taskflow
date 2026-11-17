@@ -37,15 +37,34 @@ func New(t testing.TB) (*cache.Redis, string) {
 	prefix := "test:" + strings.ToLower(rand.Text()[:10]) + ":"
 	t.Cleanup(func() {
 		defer rc.Close()
-		keys, err := rc.Client().Keys(ctx, prefix+"*").Result() // KEYS chỉ dùng trong test: nó quét toàn bộ Redis
-		if err == nil && len(keys) > 0 {
-			err = rc.Delete(ctx, keys...)
+		// KEYS chỉ dùng trong test: nó quét toàn bộ Redis. Key của asynq có dạng asynq:{<queue>}:...
+		// với tên queue có tiền tố của test (jobs.RedisOptions.QueuePrefix)
+		var keys []string
+		for _, pattern := range []string{prefix + "*", "asynq:{" + prefix + "*"} {
+			k, err := rc.Client().Keys(ctx, pattern).Result()
+			if err != nil {
+				t.Errorf("dọn key %s: %v", pattern, err)
+			}
+			keys = append(keys, k...)
 		}
-		if err != nil {
-			t.Errorf("dọn key %s*: %v", prefix, err)
+		if len(keys) > 0 {
+			if err := rc.Delete(ctx, keys...); err != nil {
+				t.Errorf("dọn key %s*: %v", prefix, err)
+			}
+		}
+		for _, q := range rc.Client().SMembers(ctx, "asynq:queues").Val() { // danh sách queue của asynq
+			if strings.HasPrefix(q, prefix) {
+				rc.Client().SRem(ctx, "asynq:queues", q)
+			}
 		}
 	})
 	return rc, prefix
+}
+
+// URL trả về URL của Redis dành cho test (rỗng khi chưa đặt), cho các client tự tạo kết nối
+// như jobs.NewRedis. Gọi sau New: New đã bỏ qua test khi chưa đặt.
+func URL() string {
+	return os.Getenv(EnvURL)
 }
 
 // WaitSubscribers chờ tới khi channel có ít nhất n subscriber (Redis Pub/Sub không giữ message:

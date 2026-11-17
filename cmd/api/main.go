@@ -107,13 +107,24 @@ func run(cfg Config) error {
 		return err
 	}
 
-	// việc nền chạy trong cùng process, serve dừng nó sau khi HTTP server đã tắt
-	a.jobs = jobs.New(jobs.Options{Workers: cfg.Workers, QueueSize: cfg.QueueSize})
+	// việc nền chạy trong cùng process (worker và scheduler), serve dừng nó sau khi HTTP server đã tắt.
+	// Có Redis thì job nằm trong Redis: không mất khi process dừng, mọi bản API dùng chung.
+	if cfg.RedisURL != "" {
+		// asynq chờ job đang chạy tối đa nửa thời gian tắt: lúc nó dừng, HTTP server đã dùng một phần,
+		// phần còn lại đủ để trả job chưa xong về hàng đợi trước khi hết TASKFLOW_SHUTDOWN_TIMEOUT
+		a.queue, err = jobs.NewRedis(cfg.RedisURL, jobs.RedisOptions{
+			Concurrency: cfg.Workers, ShutdownTimeout: cfg.ShutdownTimeout / 2})
+		if err != nil {
+			return fmt.Errorf("hàng đợi: %w", err)
+		}
+		slog.Info("hàng đợi job trong Redis (asynq)")
+	} else {
+		a.queue = jobs.NewLocal(jobs.Options{Workers: cfg.Workers, QueueSize: cfg.QueueSize})
+		slog.Warn("chưa đặt TASKFLOW_REDIS_URL: hàng đợi job trong bộ nhớ, mất job khi tắt server")
+	}
 	a.notifier = notify.Log{Logger: slog.Default()} // chưa có email: thông báo chỉ ghi ra log
-	a.jobs.Start()
-	if cfg.CleanupEvery > 0 {
-		a.jobs.Enqueue(cleanupJob(a)) // dọn một lần lúc khởi động, sau đó theo chu kỳ
-		a.jobs.Every(cfg.CleanupEvery, cleanupJob(a))
+	if err := a.startJobs(cfg.CleanupEvery, cfg.RemindAt); err != nil {
+		return fmt.Errorf("hàng đợi: %w", err)
 	}
 
 	tokens := auth.NewTokens([]byte(cfg.JWTSecret), cfg.JWTTTL)

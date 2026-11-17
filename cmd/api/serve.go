@@ -48,7 +48,7 @@ func serve(ctx context.Context, srv *http.Server, ln net.Listener, a *app, delay
 	slog.Info("đã dừng HTTP server")
 
 	// 3. không còn handler nào Enqueue được nữa: dừng việc nền với thời gian còn lại
-	if err := a.jobs.Stop(sctx); err != nil {
+	if err := a.queue.Stop(sctx); err != nil {
 		errs = append(errs, fmt.Errorf("việc nền: %w", err))
 	}
 	slog.Info("đã dừng việc nền")

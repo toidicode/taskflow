@@ -25,6 +25,8 @@ func (r *recordNotifier) TaskDone(ctx context.Context, n notify.TaskDone) error 
 	return nil
 }
 
+func (r *recordNotifier) Deadline(ctx context.Context, n notify.Deadline) error { return nil }
+
 func TestTaskDoneNotification(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStores(t)
@@ -53,7 +55,7 @@ func TestTaskDoneNotification(t *testing.T) {
 	// task #1 đã done trong dữ liệu mẫu; task #4 không giao cho ai, An tự làm xong: không báo ai
 	sendAs(mux, 1, "PATCH", "/api/v1/tasks/4", `{"status": "done"}`)
 
-	if err := s.jobs.Stop(ctx); err != nil { // chờ worker chạy hết các job đã nhận
+	if err := s.queue.Stop(ctx); err != nil { // chờ worker chạy hết các job đã nhận
 		t.Fatal(err)
 	}
 	sent := s.notifier.(*recordNotifier).sent
@@ -67,13 +69,13 @@ func TestTaskDoneNotification(t *testing.T) {
 
 func TestTaskDoneWhenStopped(t *testing.T) {
 	s := newTestStores(t)
-	s.jobs.Stop(context.Background()) // hàng đợi không nhận thêm job nào
+	s.queue.Stop(context.Background()) // hàng đợi không nhận thêm job nào
 	addUsers(t, s, "Binh")
 	rec := sendAs(newMux(s, testTokens), 1, "PATCH", "/api/v1/tasks/3", `{"assignee_id": 2, "status": "done"}`)
 	if rec.Code != http.StatusOK { // không gửi được thông báo vẫn không làm hỏng request
 		t.Fatalf("PATCH: %d %s", rec.Code, rec.Body)
 	}
-	if err := s.jobs.Enqueue(jobs.Job{}); !errors.Is(err, jobs.ErrStopped) {
+	if err := s.queue.Enqueue(context.Background(), notify.TypeTaskDone, notify.TaskDone{}); !errors.Is(err, jobs.ErrStopped) {
 		t.Errorf("Enqueue = %v", err)
 	}
 }

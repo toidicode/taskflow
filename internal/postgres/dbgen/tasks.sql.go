@@ -55,7 +55,7 @@ func (q *Queries) DeleteTask(ctx context.Context, id int64) (int64, error) {
 }
 
 const getTask = `-- name: GetTask :one
-SELECT id, project_id, title, description, status, assignee_id, due_date, completed_at FROM tasks
+SELECT id, project_id, title, description, status, assignee_id, due_date, completed_at, reminded_due_date FROM tasks
 WHERE id = $1
 `
 
@@ -71,12 +71,60 @@ func (q *Queries) GetTask(ctx context.Context, id int64) (Task, error) {
 		&i.AssigneeID,
 		&i.DueDate,
 		&i.CompletedAt,
+		&i.RemindedDueDate,
 	)
 	return i, err
 }
 
+const listDueTasks = `-- name: ListDueTasks :many
+SELECT id, project_id, title, description, status, assignee_id, due_date, completed_at, reminded_due_date FROM tasks
+WHERE status <> 'done'
+  AND due_date > $1 AND due_date <= $2
+  AND reminded_due_date IS DISTINCT FROM due_date
+ORDER BY due_date, id
+`
+
+type ListDueTasksParams struct {
+	DueAfter  sql.NullTime
+	DueBefore sql.NullTime
+}
+
+// Task chưa xong có hạn trong (due_after, due_before] và chưa được nhắc cho đúng hạn đó.
+func (q *Queries) ListDueTasks(ctx context.Context, arg ListDueTasksParams) ([]Task, error) {
+	rows, err := q.db.QueryContext(ctx, listDueTasks, arg.DueAfter, arg.DueBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Task
+	for rows.Next() {
+		var i Task
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.AssigneeID,
+			&i.DueDate,
+			&i.CompletedAt,
+			&i.RemindedDueDate,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTasks = `-- name: ListTasks :many
-SELECT id, project_id, title, description, status, assignee_id, due_date, completed_at FROM tasks
+SELECT id, project_id, title, description, status, assignee_id, due_date, completed_at, reminded_due_date FROM tasks
 WHERE ($1::bigint IS NULL OR project_id = $1)
   AND ($2::text IS NULL OR status = $2)
   AND ($3::text IS NULL OR EXISTS (
@@ -128,6 +176,7 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 			&i.AssigneeID,
 			&i.DueDate,
 			&i.CompletedAt,
+			&i.RemindedDueDate,
 		); err != nil {
 			return nil, err
 		}
@@ -140,6 +189,22 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 		return nil, err
 	}
 	return items, nil
+}
+
+const markTaskReminded = `-- name: MarkTaskReminded :exec
+UPDATE tasks
+SET reminded_due_date = $1
+WHERE id = $2
+`
+
+type MarkTaskRemindedParams struct {
+	DueDate sql.NullTime
+	ID      int64
+}
+
+func (q *Queries) MarkTaskReminded(ctx context.Context, arg MarkTaskRemindedParams) error {
+	_, err := q.db.ExecContext(ctx, markTaskReminded, arg.DueDate, arg.ID)
+	return err
 }
 
 const updateTask = `-- name: UpdateTask :execrows

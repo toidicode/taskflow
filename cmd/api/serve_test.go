@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/toidicode/taskflow/internal/jobs"
+	"github.com/toidicode/taskflow/internal/notify"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/task"
 )
@@ -99,7 +100,7 @@ func TestServeWaitsForRequests(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Errorf("serve: %v", err)
 	}
-	if err := s.jobs.Enqueue(jobs.Job{Name: "muộn"}); !errors.Is(err, jobs.ErrStopped) {
+	if err := s.queue.Enqueue(context.Background(), notify.TypeTaskDone, nil); !errors.Is(err, jobs.ErrStopped) {
 		t.Errorf("Enqueue sau khi tắt: %v, muốn ErrStopped", err)
 	}
 }

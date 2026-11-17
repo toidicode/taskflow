@@ -16,16 +16,16 @@ import (
 )
 
 // Các interface dưới đây do Service (nơi dùng) khai báo và chỉ gồm những method nó cần.
-// main truyền vào kiểu thật: user.Store, *jobs.Dispatcher, attachment.Files.
+// main truyền vào kiểu thật: user.Store, jobs.Queue (Local hoặc Redis), attachment.Files.
 
 // Users tìm user, để kiểm tra người được giao task có thật.
 type Users interface {
 	Get(ctx context.Context, id int) (user.User, error)
 }
 
-// Queue là hàng đợi việc nền.
+// Queue là hàng đợi việc nền: job có tên và payload JSON (jobs.Local hoặc jobs.Redis).
 type Queue interface {
-	Enqueue(j jobs.Job) error
+	Enqueue(ctx context.Context, typ string, payload any, opts ...jobs.Option) error
 }
 
 // Files dọn file đính kèm khi xóa task. Không dùng thẳng attachment.Store vì internal/attachment
@@ -50,14 +50,13 @@ type Service struct {
 	users    Users
 	files    Files
 	queue    Queue
-	notifier notify.Notifier
 	events   Publisher // nil: không gửi event
 }
 
 // NewService tạo Service từ các thành phần nó cần, main nối chúng lại lúc khởi động.
 // events nhận event sau mỗi thay đổi, nil là không gửi.
-func NewService(tasks Store, projects project.Store, users Users, files Files, queue Queue, notifier notify.Notifier, events Publisher) *Service {
-	return &Service{tasks: tasks, projects: projects, users: users, files: files, queue: queue, notifier: notifier, events: events}
+func NewService(tasks Store, projects project.Store, users Users, files Files, queue Queue, events Publisher) *Service {
+	return &Service{tasks: tasks, projects: projects, users: users, files: files, queue: queue, events: events}
 }
 
 // Get trả về task id và project chứa nó. User không được xem task (CanView) nhận lỗi
@@ -283,8 +282,8 @@ func noAssignee(t *Task) error {
 }
 
 // notifyDone đưa việc báo "task đã xong" cho chủ project và người được giao (trừ người vừa đổi
-// status) vào hàng đợi. Hàng đợi đầy thì chỉ ghi log: status đã lưu xong, mất một thông báo
-// không đáng để trả lỗi cho client.
+// status) vào hàng đợi. Không đưa được (hàng đợi đầy, Redis lỗi) thì chỉ ghi log: status đã
+// lưu xong, mất một thông báo không đáng để trả lỗi cho client.
 func (s *Service) notifyDone(ctx context.Context, userID int, t Task, p project.Project) {
 	n := notify.TaskDone{TaskID: t.ID, Title: t.Title, DoneBy: userID}
 	for _, id := range []int{p.OwnerID, t.AssigneeID} {
@@ -295,11 +294,9 @@ func (s *Service) notifyDone(ctx context.Context, userID int, t Task, p project.
 	if len(n.To) == 0 { // tự làm, tự xong: không cần báo ai
 		return
 	}
-	// job chỉ giữ n (bản sao dữ liệu), không giữ ctx của request
-	err := s.queue.Enqueue(jobs.Job{Name: "notify-task-done", Run: func(ctx context.Context) error {
-		return s.notifier.TaskDone(ctx, n)
-	}})
-	if err != nil {
+	// job chỉ mang dữ liệu (payload JSON), không mang ctx của request: nó chạy sau khi request đã
+	// kết thúc, có khi ở bản API khác. WithoutCancel: client ngắt kết nối ngay thì vẫn đưa được job vào
+	if err := s.queue.Enqueue(context.WithoutCancel(ctx), notify.TypeTaskDone, n); err != nil {
 		reqlog.Logger(ctx).Warn("bỏ qua thông báo task done", "task_id", t.ID, "err", err)
 	}
 }

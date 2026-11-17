@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -47,26 +48,64 @@ func newTestFiles(t *testing.T) *storage.Disk {
 	return files
 }
 
-// withTestJobs gắn vào a một dispatcher một worker (dừng khi test xong) và một recordNotifier.
+// withTestJobs đăng ký các loại job của TaskFlow với a.queue (chưa có thì tạo hàng đợi trong bộ nhớ
+// một worker) rồi chạy nó, dừng khi test xong. Thông báo đi vào một recordNotifier.
+// Không có job định kỳ: test gọi thẳng handler hoặc service.
 func withTestJobs(t *testing.T, a *app) *app {
 	t.Helper()
-	a.jobs = jobs.New(jobs.Options{Workers: 1, Logger: slog.New(slog.DiscardHandler)})
-	a.jobs.Start()
-	t.Cleanup(func() { a.jobs.Stop(context.Background()) })
+	if a.queue == nil {
+		a.queue = jobs.NewLocal(jobs.Options{Workers: 1, Logger: slog.New(slog.DiscardHandler)})
+	}
 	a.notifier = &recordNotifier{}
+	if err := a.startJobs(0, "off"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.queue.Stop(context.Background()) })
 	return a
 }
 
 // recordNotifier ghi lại các thông báo thay vì gửi, dùng được từ nhiều goroutine.
 type recordNotifier struct {
-	mu   sync.Mutex
-	sent []notify.TaskDone
+	mu        sync.Mutex
+	sent      []notify.TaskDone
+	deadlines []notify.Deadline
 }
 
 func (r *recordNotifier) TaskDone(ctx context.Context, n notify.TaskDone) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sent = append(r.sent, n)
+	return nil
+}
+
+func (r *recordNotifier) Deadline(ctx context.Context, n notify.Deadline) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deadlines = append(r.deadlines, n)
+	return nil
+}
+
+// list trả về bản sao các thông báo "sắp tới hạn" đã nhận.
+func (r *recordNotifier) list() []notify.Deadline {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.deadlines)
+}
+
+// waitSent chờ tới khi r nhận được ít nhất n thông báo task done (tối đa 10 giây) rồi trả về chúng:
+// với hàng đợi Redis, job chạy ở worker nên không chờ được bằng Stop như hàng đợi trong bộ nhớ.
+func (r *recordNotifier) waitSent(t *testing.T, n int) []notify.TaskDone {
+	t.Helper()
+	for range 200 {
+		r.mu.Lock()
+		sent := slices.Clone(r.sent)
+		r.mu.Unlock()
+		if len(sent) >= n {
+			return sent
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("chưa nhận đủ %d thông báo task done sau 10 giây", n)
 	return nil
 }
 

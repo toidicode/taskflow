@@ -2,6 +2,7 @@ package task_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -21,16 +22,38 @@ type noFiles struct{}
 func (noFiles) StoredNames(context.Context, int) ([]string, error) { return nil, nil }
 func (noFiles) Remove(context.Context, ...string)                  {}
 
-// runQueue cài task.Queue: chạy job ngay khi nhận, đủ cho test.
-type runQueue struct{}
+// runQueue cài task.Queue: mã hóa payload như hàng đợi thật rồi chạy handler ngay, đủ cho test.
+type runQueue map[string]jobs.Handler
 
-func (runQueue) Enqueue(j jobs.Job) error { return j.Run(context.Background()) }
+func newRunQueue(n notify.Notifier) runQueue {
+	q := runQueue{}
+	for _, h := range notify.Handlers(n) {
+		q[h.Type] = h
+	}
+	return q
+}
+
+func (q runQueue) Enqueue(ctx context.Context, typ string, payload any, opts ...jobs.Option) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return q[typ].Run(ctx, data)
+}
 
 // sentNotifier ghi lại các thông báo.
-type sentNotifier struct{ sent []notify.TaskDone }
+type sentNotifier struct {
+	sent      []notify.TaskDone
+	deadlines []notify.Deadline
+}
 
 func (n *sentNotifier) TaskDone(_ context.Context, d notify.TaskDone) error {
 	n.sent = append(n.sent, d)
+	return nil
+}
+
+func (n *sentNotifier) Deadline(_ context.Context, d notify.Deadline) error {
+	n.deadlines = append(n.deadlines, d)
 	return nil
 }
 
@@ -51,7 +74,7 @@ func newService(t *testing.T, events task.Publisher) (*task.Service, *sentNotifi
 		}
 	}
 	n := &sentNotifier{}
-	return task.NewService(tasks, projects, users, noFiles{}, runQueue{}, n, events), n
+	return task.NewService(tasks, projects, users, noFiles{}, newRunQueue(n), events), n
 }
 
 func TestServiceUpdate(t *testing.T) {

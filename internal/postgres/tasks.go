@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/toidicode/taskflow/internal/postgres/dbgen"
 	"github.com/toidicode/taskflow/internal/project"
@@ -263,6 +264,37 @@ func (s *TaskStore) RemoveTag(ctx context.Context, taskID int, name string) erro
 	}
 	if err != nil {
 		return fmt.Errorf("gỡ tag của task #%d: %w", taskID, err)
+	}
+	return nil
+}
+
+func (s *TaskStore) DueSoon(ctx context.Context, from, to time.Time) ([]task.Task, error) {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
+	rows, err := s.q.ListDueTasks(ctx, dbgen.ListDueTasksParams{
+		DueAfter:  sql.NullTime{Time: from, Valid: true},
+		DueBefore: sql.NullTime{Time: to, Valid: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tìm task sắp tới hạn: %w", err)
+	}
+	tasks, err := s.withTags(ctx, rows)
+	if err != nil {
+		return nil, fmt.Errorf("tìm task sắp tới hạn: %w", err)
+	}
+	return tasks, nil
+}
+
+func (s *TaskStore) MarkReminded(ctx context.Context, id int, due time.Time) error {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
+	err := s.q.MarkTaskReminded(ctx, dbgen.MarkTaskRemindedParams{
+		ID: int64(id), DueDate: sql.NullTime{Time: due, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("đánh dấu đã nhắc task #%d: %w", id, err)
 	}
 	return nil
 }

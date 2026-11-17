@@ -14,6 +14,7 @@ import (
 
 	"github.com/toidicode/taskflow/internal/cache"
 	"github.com/toidicode/taskflow/internal/httpapi"
+	"github.com/toidicode/taskflow/internal/jobs"
 	"github.com/toidicode/taskflow/internal/ratelimit"
 )
 
@@ -33,6 +34,7 @@ type Config struct {
 	Workers      int           // số worker chạy việc nền
 	QueueSize    int           // số việc nền chờ tối đa
 	CleanupEvery time.Duration // chu kỳ dọn file mồ côi, 0 là tắt
+	RemindAt     string        // lịch cron của job nhắc task sắp tới hạn, "off" là tắt
 	RedisURL     string        // chuỗi kết nối Redis cho cache (có thể chứa mật khẩu), rỗng là không cache
 	CacheTTL     time.Duration // thời gian sống của dữ liệu trong cache
 
@@ -66,6 +68,7 @@ func defaultConfig() Config {
 		Workers:      4,
 		QueueSize:    100,
 		CleanupEvery: time.Hour,
+		RemindAt:     "0 * * * *", // đầu mỗi giờ
 		CacheTTL:     time.Minute,
 
 		RateAuthIP:     ratelimit.Limit{N: 10, Period: time.Minute},
@@ -101,6 +104,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	env.int("TASKFLOW_WORKERS", &cfg.Workers)
 	env.int("TASKFLOW_QUEUE_SIZE", &cfg.QueueSize)
 	env.duration("TASKFLOW_CLEANUP_INTERVAL", &cfg.CleanupEvery)
+	env.str("TASKFLOW_REMIND_SCHEDULE", &cfg.RemindAt)
 	env.str("TASKFLOW_REDIS_URL", &cfg.RedisURL)
 	env.duration("TASKFLOW_CACHE_TTL", &cfg.CacheTTL)
 	env.text("TASKFLOW_RATE_AUTH_IP", &cfg.RateAuthIP)
@@ -128,6 +132,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.IntVar(&cfg.Workers, "workers", cfg.Workers, "số worker chạy việc nền (TASKFLOW_WORKERS)")
 	fs.IntVar(&cfg.QueueSize, "queue-size", cfg.QueueSize, "số việc nền chờ tối đa (TASKFLOW_QUEUE_SIZE)")
 	fs.DurationVar(&cfg.CleanupEvery, "cleanup-interval", cfg.CleanupEvery, "chu kỳ dọn file mồ côi, 0: tắt (TASKFLOW_CLEANUP_INTERVAL)")
+	fs.StringVar(&cfg.RemindAt, "remind-schedule", cfg.RemindAt, "lịch cron nhắc task sắp tới hạn, off: tắt (TASKFLOW_REMIND_SCHEDULE)")
 	fs.DurationVar(&cfg.CacheTTL, "cache-ttl", cfg.CacheTTL, "thời gian sống của dữ liệu trong cache (TASKFLOW_CACHE_TTL)")
 	fs.TextVar(&cfg.RateAuthIP, "rate-auth-ip", cfg.RateAuthIP, "giới hạn đăng ký/đăng nhập mỗi IP, VD 10/1m hoặc off (TASKFLOW_RATE_AUTH_IP)")
 	fs.TextVar(&cfg.RateLoginEmail, "rate-login-email", cfg.RateLoginEmail, "giới hạn đăng nhập mỗi email (TASKFLOW_RATE_LOGIN_EMAIL)")
@@ -245,6 +250,11 @@ func (c Config) validate() error {
 	if c.CleanupEvery < 0 {
 		errs = append(errs, fmt.Errorf("cleanup-interval %v: không được âm (0 là tắt)", c.CleanupEvery))
 	}
+	if c.RemindAt != "off" {
+		if _, err := jobs.ParseSchedule(c.RemindAt); err != nil {
+			errs = append(errs, fmt.Errorf("remind-schedule: %w", err))
+		}
+	}
 	if _, err := httpapi.ParseTrustedProxies(c.TrustedProxies); err != nil {
 		errs = append(errs, fmt.Errorf("trusted-proxies %w", err))
 	}
@@ -292,6 +302,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("workers", c.Workers),
 		slog.Int("queue_size", c.QueueSize),
 		slog.String("cleanup_interval", c.CleanupEvery.String()),
+		slog.String("remind_schedule", c.RemindAt),
 		slog.String("redis_url", hidden(c.RedisURL)),
 		slog.String("cache_ttl", c.CacheTTL.String()),
 		slog.String("rate_auth_ip", c.RateAuthIP.String()),

@@ -37,7 +37,7 @@ type app struct {
 	users       user.Store
 	attachments attachment.Store   // thông tin file đính kèm
 	files       storage.Storage    // nội dung file đính kèm
-	jobs        *jobs.Dispatcher   // việc nền
+	queue       jobs.Queue         // hàng đợi việc nền: Redis (asynq) khi có, không thì trong bộ nhớ
 	notifier    notify.Notifier    // gửi thông báo (trong job)
 	ready       *httpapi.Readiness // trả lời /ready, serve bật trạng thái đang tắt
 	rateLimit   httpapi.RateLimit  // giới hạn số request, Limiter nil là tắt
@@ -46,10 +46,15 @@ type app struct {
 	tickets     realtime.Tickets   // vé mở WebSocket
 }
 
+// taskService tạo task.Service từ các store của a.
+func (a *app) taskService() *task.Service {
+	return task.NewService(a.tasks, a.projects, a.users,
+		attachment.Files{Store: a.attachments, Storage: a.files}, a.queue, a.events)
+}
+
 // handler tạo các service từ store rồi tạo handler HTTP của cả API.
 func (a *app) handler(tokens *auth.Tokens, corsOrigin string, trusted []netip.Prefix) http.Handler {
-	tasks := task.NewService(a.tasks, a.projects, a.users,
-		attachment.Files{Store: a.attachments, Storage: a.files}, a.jobs, a.notifier, a.events)
+	tasks := a.taskService()
 	projects := project.NewService(a.projects, tasks) // *task.Service có HasTasks: thỏa project.Tasks
 	return httpapi.New(httpapi.Deps{
 		Tasks:       tasks,
@@ -199,13 +204,51 @@ func projectLookup(projects project.Store) task.ProjectFunc {
 // thời gian tối đa của một lần upload (5 phút).
 const orphanMinAge = time.Hour
 
-// cleanupJob là job xóa file mồ côi trong thư mục upload (file không có hàng attachments nào).
-func cleanupJob(a *app) jobs.Job {
-	return jobs.Job{Name: "clean-orphan-files", Run: func(ctx context.Context) error {
-		n, err := attachment.CleanOrphans(ctx, a.attachments, a.files, time.Now().Add(-orphanMinAge))
-		slog.Info("đã dọn file mồ côi", "removed", n)
+// typeCleanOrphans là job xóa file mồ côi trong thư mục upload (file không có hàng attachments nào).
+const typeCleanOrphans = "attachment:clean_orphans:v1"
+
+// startJobs đăng ký các loại job và lịch chạy định kỳ với a.queue rồi chạy nó.
+// Mọi bản API đều chạy worker và scheduler, job định kỳ có Unique và làm lại được: lịch cron
+// (nhắc deadline) trùng giờ ở mọi bản nên Unique bỏ các lần thừa; lịch @every (dọn file) tính từ
+// lúc mỗi bản khởi động nên không trùng giờ, chạy N lần mỗi chu kỳ, vô hại vì làm lại được.
+func (a *app) startJobs(cleanupEvery time.Duration, remindAt string) error {
+	for _, h := range notify.Handlers(a.notifier) {
+		a.queue.Handle(h)
+	}
+	a.queue.Handle(jobs.Handler{Type: typeCleanOrphans, Queue: jobs.QueueLow, MaxRetry: 3,
+		Timeout: 5 * time.Minute, Unique: 10 * time.Minute,
+		Run: func(ctx context.Context, _ []byte) error {
+			n, err := attachment.CleanOrphans(ctx, a.attachments, a.files, time.Now().Add(-orphanMinAge))
+			slog.Info("đã dọn file mồ côi", "removed", n)
+			return err
+		}})
+	a.queue.Handle(jobs.Handler{Type: task.TypeRemindDeadlines, Queue: jobs.QueueLow, MaxRetry: 3,
+		Timeout: time.Minute, Unique: 10 * time.Minute,
+		Run: func(ctx context.Context, _ []byte) error {
+			n, err := a.taskService().RemindDeadlines(ctx, time.Now())
+			slog.Info("đã quét task sắp tới hạn", "reminded", n)
+			return err
+		}})
+
+	if cleanupEvery > 0 {
+		if err := a.queue.Schedule("@every "+cleanupEvery.String(), typeCleanOrphans); err != nil {
+			return err
+		}
+	}
+	if remindAt != "off" {
+		if err := a.queue.Schedule(remindAt, task.TypeRemindDeadlines); err != nil {
+			return err
+		}
+	}
+	if err := a.queue.Start(); err != nil {
 		return err
-	}}
+	}
+	if cleanupEvery > 0 { // dọn một lần lúc khởi động, sau đó theo lịch
+		if err := a.queue.Enqueue(context.Background(), typeCleanOrphans, nil); err != nil {
+			slog.Warn("không dọn được file mồ côi lúc khởi động", "err", err)
+		}
+	}
+	return nil
 }
 
 // seed thêm vài project và task mẫu cho store trong bộ nhớ.

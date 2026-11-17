@@ -189,7 +189,7 @@ func (d *Dispatcher) process(j Job) {
 			log.Warn("bỏ dở job vì dispatcher dừng", "attempt", attempt, "err", err)
 			return
 		}
-		if attempt >= d.opts.MaxAttempts {
+		if attempt >= d.opts.MaxAttempts || errors.Is(err, SkipRetry) {
 			log.Error("job thất bại, không chạy lại nữa", "attempt", attempt, "err", err)
 			return
 		}

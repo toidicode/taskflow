@@ -1,4 +1,4 @@
-# TaskFlow API trên VPS: PostgreSQL + migration + API + Caddy (HTTPS).
+# TaskFlow API trên VPS: PostgreSQL + Redis + migration + API + Caddy (HTTPS).
 # Deploy: docker compose pull migrate api && docker compose run --rm migrate && docker compose up -d
 
 # giới hạn log của mọi container: tối đa 3 file x 10 MB
@@ -27,6 +27,23 @@ services:
       start_interval: 1s
     logging: *logging
 
+  redis: # cache, rate limit, realtime và hàng đợi job (Bài 43-47)
+    image: redis:8-alpine
+    restart: unless-stopped
+    # hàng đợi job phải bền: AOF ghi mỗi lệnh ra đĩa (fsync mỗi giây). Dùng quá 256mb thì lệnh ghi
+    # báo lỗi chứ không tự xóa key (noeviction là mặc định, ghi rõ để không ai đổi sang allkeys-lru)
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      start_interval: 1s
+    logging: *logging
+
   migrate: # chạy một lần mỗi lần deploy rồi thoát
     image: ghcr.io/toidicode/taskflow-api:${TASKFLOW_VERSION:?chưa đặt TASKFLOW_VERSION trong .env}
     command: ["-migrate"]
@@ -45,11 +62,14 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgres://taskflow:${POSTGRES_PASSWORD}@db:5432/taskflow?sslmode=disable
+      TASKFLOW_REDIS_URL: redis://redis:6379/0
       TASKFLOW_TRUSTED_PROXIES: 10.39.0.10 # chỉ tin X-Forwarded-For do Caddy gửi
     volumes:
       - uploads:/data/uploads
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -92,6 +112,7 @@ networks:
 
 volumes:
   pgdata:
+  redisdata:
   uploads:
   caddy_data:
   caddy_config:

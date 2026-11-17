@@ -53,6 +53,11 @@ func TestLoadConfig(t *testing.T) {
 		{"việc nền", []string{"-cleanup-interval", "0"},
 			map[string]string{"TASKFLOW_WORKERS": "8", "TASKFLOW_QUEUE_SIZE": "500", "TASKFLOW_JWT_SECRET": testJWTSecret},
 			func(c Config) bool { return c.Workers == 8 && c.QueueSize == 500 && c.CleanupEvery == 0 }},
+		{"lịch nhắc deadline", []string{"-remind-schedule", "@every 30m"},
+			map[string]string{"TASKFLOW_REMIND_SCHEDULE": "off", "TASKFLOW_JWT_SECRET": testJWTSecret},
+			func(c Config) bool { return c.RemindAt == "@every 30m" }},
+		{"tắt nhắc deadline", nil, map[string]string{"TASKFLOW_REMIND_SCHEDULE": "off", "TASKFLOW_JWT_SECRET": testJWTSecret},
+			func(c Config) bool { return c.RemindAt == "off" }},
 		{"-migrate không cần secret", []string{"-migrate"}, map[string]string{"DATABASE_URL": "postgres://u:p@db/taskflow"},
 			func(c Config) bool { return c.Migrate }},
 		{"tắt server", []string{"-shutdown-timeout", "20s"},
@@ -108,6 +113,8 @@ func TestLoadConfigErrors(t *testing.T) {
 		{"workers và cleanup sai", []string{"-workers", "0", "-cleanup-interval", "-1m"},
 			map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
 			[]string{"workers 0: phải lớn hơn 0", "cleanup-interval -1m0s: không được âm"}},
+		{"lịch nhắc sai", []string{"-remind-schedule", "mỗi giờ"}, map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
+			[]string{`remind-schedule: lịch "mỗi giờ"`}},
 		{"thừa tham số", []string{"serve"}, nil, []string{`không nhận tham số "serve"`}},
 		{"-migrate thiếu DATABASE_URL", []string{"-migrate"}, nil, []string{"migrate: cần đặt DATABASE_URL"}},
 		{"proxy sai", []string{"-trusted-proxies", "caddy"}, map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
@@ -163,7 +170,7 @@ func TestConfigLogValue(t *testing.T) {
 	if strings.Contains(buf.String(), "bi-mat") {
 		t.Errorf("log lộ mật khẩu: %s", buf.String())
 	}
-	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`, `"shutdown_timeout":"8s"`, `"redis_url":"[đã ẩn]"`, `"cache_ttl":"1m0s"`, `"rate_auth_ip":"10/1m"`, `"rate_login_email":"5/10m"`, `"rate_user":"600/1m"`} {
+	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`, `"remind_schedule":"0 * * * *"`, `"shutdown_timeout":"8s"`, `"redis_url":"[đã ẩn]"`, `"cache_ttl":"1m0s"`, `"rate_auth_ip":"10/1m"`, `"rate_login_email":"5/10m"`, `"rate_user":"600/1m"`} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("log thiếu %s: %s", want, buf.String())
 		}
