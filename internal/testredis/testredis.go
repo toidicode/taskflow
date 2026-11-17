@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toidicode/taskflow/internal/cache"
 )
@@ -45,4 +46,18 @@ func New(t testing.TB) (*cache.Redis, string) {
 		}
 	})
 	return rc, prefix
+}
+
+// WaitSubscribers chờ tới khi channel có ít nhất n subscriber (Redis Pub/Sub không giữ message:
+// gửi trước khi bên nhận kịp SUBSCRIBE là mất), tối đa 5 giây.
+func WaitSubscribers(t testing.TB, rc *cache.Redis, channel string, n int64) {
+	t.Helper()
+	for range 500 {
+		got, err := rc.Client().PubSubNumSub(context.Background(), channel).Result()
+		if err == nil && got[channel] >= n {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("channel %s chưa có đủ %d subscriber", channel, n)
 }

@@ -94,7 +94,9 @@ func run(cfg Config) error {
 			slog.Info("thống kê cache project", "hits", st.Hits, "misses", st.Misses, "errors", st.Errors)
 			rc.Close()
 		}()
-		slog.Info("bật cache project, rate limit đếm trong Redis", "cache_ttl", cfg.CacheTTL)
+		receive := a.useRedisRealtime(rc, "taskflow:realtime:") // event đi qua Redis Pub/Sub tới mọi bản API
+		go receive(ctx)
+		slog.Info("bật cache project, rate limit và realtime qua Redis", "cache_ttl", cfg.CacheTTL)
 	} else {
 		slog.Info("chưa đặt TASKFLOW_REDIS_URL: không cache, rate limit đếm trong bộ nhớ")
 	}

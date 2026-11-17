@@ -24,6 +24,8 @@ tags:
     description: Task, tag và phân trang
   - name: attachments
     description: File đính kèm của task
+  - name: realtime
+    description: Nhận thay đổi của task ngay khi xảy ra, qua WebSocket
   - name: health
     description: Kiểm tra trạng thái server, dành cho Docker và load balancer
 
@@ -486,6 +488,59 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
 
+  /api/v1/realtime/tickets:
+    post:
+      tags: [realtime]
+      summary: Lấy vé mở WebSocket
+      description: Vé dùng một lần, sống 30 giây. Gửi nó trong `?ticket=` khi mở `/api/v1/projects/{id}/events`.
+      operationId: createRealtimeTicket
+      responses:
+        "201":
+          description: Vé mới
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Ticket"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /api/v1/projects/{id}/events:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [realtime, projects]
+      summary: Nhận event của các task trong project qua WebSocket
+      description: |
+        Mở bằng WebSocket (`new WebSocket("wss://.../api/v1/projects/1/events?ticket=...")`), chỉ chủ project.
+        Server gửi mỗi event một message text là JSON theo schema `TaskEvent`; client không gửi gì lên
+        (gửi message thì bị đóng với mã 1008). Server ping mỗi 30 giây. Mã đóng: 1001 server đang tắt,
+        1008 client đọc quá chậm (hàng chờ đầy). Mất kết nối thì lấy vé mới, kết nối lại và tải lại danh sách task:
+        event trong lúc mất kết nối không được gửi lại.
+      operationId: projectEvents
+      security:
+        - wsTicket: []
+      responses:
+        "101":
+          description: Đã chuyển sang WebSocket
+          headers:
+            Upgrade: {schema: {type: string, const: websocket}}
+            Sec-WebSocket-Accept: {schema: {type: string}}
+        "400": {$ref: "#/components/responses/BadParams"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403":
+          description: Origin của trang web không được phép mở WebSocket (CSWSH)
+          content:
+            text/plain:
+              schema: {type: string}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "426":
+          description: Request không phải WebSocket handshake
+          headers:
+            Upgrade: {schema: {type: string, const: websocket}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
 components:
   securitySchemes:
     bearerAuth:
@@ -493,6 +548,11 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: Access token từ `POST /api/v1/auth/login`, mặc định sống 15 phút.
+    wsTicket:
+      type: apiKey
+      in: query
+      name: ticket
+      description: Vé từ `POST /api/v1/realtime/tickets`. Trình duyệt không gửi được header Authorization khi mở WebSocket.
 
   parameters:
     ID:
@@ -736,3 +796,26 @@ components:
         size: {type: integer, description: Byte}
         uploaded_by: {type: integer, description: Không có khi người upload đã bị xóa}
         created_at: {type: string, format: date-time}
+    Ticket:
+      type: object
+      additionalProperties: false
+      required: [ticket, expires_in]
+      properties:
+        ticket: {type: string}
+        expires_in: {type: integer, description: Số giây tới khi vé hết hạn}
+    TaskEvent:
+      description: Message server gửi qua WebSocket của `/api/v1/projects/{id}/events`
+      type: object
+      additionalProperties: false
+      required: [type, project_id, task_id, by]
+      properties:
+        type:
+          type: string
+          enum: [task.created, task.updated, task.status_changed, task.deleted]
+          description: task.status_changed là một lần sửa có đổi status
+        project_id: {type: integer}
+        task_id: {type: integer}
+        by: {type: integer, description: User đã làm thay đổi}
+        task:
+          $ref: "#/components/schemas/Task"
+          description: Task sau khi thay đổi, không có với task.deleted

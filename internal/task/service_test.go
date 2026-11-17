@@ -35,7 +35,8 @@ func (n *sentNotifier) TaskDone(_ context.Context, d notify.TaskDone) error {
 }
 
 // newService tạo Service với project #1 của user #1 (An), user #2 (Bình) và task #1 giao cho Bình.
-func newService(t *testing.T) (*task.Service, *sentNotifier) {
+// events nhận event của Service, nil là không gửi.
+func newService(t *testing.T, events task.Publisher) (*task.Service, *sentNotifier) {
 	t.Helper()
 	ctx := context.Background()
 	projects, tasks, users := project.NewMemoryStore(), task.NewMemoryStore(), user.NewMemoryStore()
@@ -50,12 +51,12 @@ func newService(t *testing.T) (*task.Service, *sentNotifier) {
 		}
 	}
 	n := &sentNotifier{}
-	return task.NewService(tasks, projects, users, noFiles{}, runQueue{}, n), n
+	return task.NewService(tasks, projects, users, noFiles{}, runQueue{}, n, events), n
 }
 
 func TestServiceUpdate(t *testing.T) {
 	ctx := context.Background()
-	s, n := newService(t)
+	s, n := newService(t, nil)
 	title, done := "Viết test service", task.StatusDone
 
 	// người ngoài: như không có task; người được giao: chỉ đổi status
@@ -75,7 +76,7 @@ func TestServiceUpdate(t *testing.T) {
 }
 
 func TestServiceCreateInvalid(t *testing.T) {
-	s, _ := newService(t)
+	s, _ := newService(t, nil)
 	err := s.Create(context.Background(), 2, &task.Task{ProjectID: 1, Title: " ", AssigneeID: 9})
 
 	// mọi lỗi dữ liệu được báo cùng lúc: project của người khác, title trống, user không có

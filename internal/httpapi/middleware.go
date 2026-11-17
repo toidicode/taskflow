@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"runtime/debug"
 	"time"
 
@@ -71,11 +72,32 @@ func logRequests(c *gin.Context) {
 	requestLogger(c).LogAttrs(c.Request.Context(), level, "request",
 		slog.String("client_ip", c.ClientIP()),
 		slog.String("method", c.Request.Method),
-		slog.String("path", c.Request.URL.RequestURI()),
+		slog.String("path", logPath(c.Request.URL)),
 		slog.Int("status", status),
 		slog.Int("size", max(c.Writer.Size(), 0)), // Size() là -1 khi chưa ghi byte nào
 		slog.Duration("duration", time.Since(start)),
 	)
+}
+
+// secretParams là các tham số query không được ghi vào log (vé WebSocket).
+var secretParams = []string{"ticket"}
+
+// logPath trả về path và query của u để ghi log, giá trị của các secretParams thay bằng "REDACTED".
+func logPath(u *url.URL) string {
+	q := u.Query()
+	hidden := false
+	for _, k := range secretParams {
+		if q.Has(k) {
+			q.Set(k, "REDACTED")
+			hidden = true
+		}
+	}
+	if !hidden {
+		return u.RequestURI()
+	}
+	v := *u
+	v.RawQuery = q.Encode()
+	return v.RequestURI()
 }
 
 // recoverPanic bắt panic của middleware và handler phía sau, ghi log kèm stack trace rồi trả 500 dạng JSON.

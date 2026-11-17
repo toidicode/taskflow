@@ -14,6 +14,7 @@ import (
 	"github.com/toidicode/taskflow/internal/notify"
 	"github.com/toidicode/taskflow/internal/postgres"
 	"github.com/toidicode/taskflow/internal/project"
+	"github.com/toidicode/taskflow/internal/realtime"
 	"github.com/toidicode/taskflow/internal/storage"
 	"github.com/toidicode/taskflow/internal/task"
 	"github.com/toidicode/taskflow/internal/user"
@@ -31,6 +32,8 @@ type stores struct {
 	notifier    notify.Notifier
 	db          *sql.DB // nil với store trong bộ nhớ
 	ready       *Readiness
+	hub         *realtime.Hub
+	tickets     realtime.Tickets
 }
 
 // memoryStores tạo các store trong bộ nhớ, chưa có dữ liệu nào.
@@ -41,7 +44,8 @@ func memoryStores(files storage.Storage) stores {
 		return p, err == nil
 	})
 	return stores{projects: projects, tasks: tasks, users: user.NewMemoryStore(),
-		attachments: attachment.NewMemoryStore(), files: files, ready: NewReadiness(nil)}
+		attachments: attachment.NewMemoryStore(), files: files, ready: NewReadiness(nil),
+		hub: realtime.NewHub(realtime.Options{}), tickets: realtime.NewMemoryTickets()}
 }
 
 // dbStores tạo các store lưu trong PostgreSQL qua db.
@@ -54,13 +58,15 @@ func dbStores(db *sql.DB, files storage.Storage) stores {
 		files:       files,
 		db:          db,
 		ready:       NewReadiness(db),
+		hub:         realtime.NewHub(realtime.Options{}),
+		tickets:     realtime.NewMemoryTickets(),
 	}
 }
 
 // deps nối các store thành service, giống app.handler trong cmd/api.
 func (s stores) deps(tokens *auth.Tokens) Deps {
 	tasks := task.NewService(s.tasks, s.projects, s.users,
-		attachment.Files{Store: s.attachments, Storage: s.files}, s.jobs, s.notifier)
+		attachment.Files{Store: s.attachments, Storage: s.files}, s.jobs, s.notifier, s.hub)
 	return Deps{
 		Tasks:       tasks,
 		Projects:    project.NewService(s.projects, tasks),
@@ -69,6 +75,7 @@ func (s stores) deps(tokens *auth.Tokens) Deps {
 		Files:       s.files,
 		Tokens:      tokens,
 		Ready:       s.ready,
+		Realtime:    Realtime{Hub: s.hub, Tickets: s.tickets},
 	}
 }
 

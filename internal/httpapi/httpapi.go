@@ -29,6 +29,7 @@ type Deps struct {
 	Tokens      *auth.Tokens
 	Ready       *Readiness // trả lời /ready
 	RateLimit   RateLimit  // giới hạn số request, Limiter nil là tắt
+	Realtime    Realtime   // WebSocket: hub và vé kết nối
 }
 
 // New tạo handler của cả API: một *gin.Engine (cũng là http.Handler) với các middleware dùng chung,
@@ -36,6 +37,9 @@ type Deps struct {
 // qua X-Forwarded-For.
 func New(d Deps, corsOrigin string, trusted []netip.Prefix) http.Handler {
 	r := newEngine(trusted)
+	if corsOrigin != "" { // frontend gọi được API thì cũng mở được WebSocket
+		d.Realtime.origins = []string{corsOrigin}
+	}
 	r.Use( // Use phải đứng trước khi đăng ký route: route đăng ký trước đó không có middleware này
 		requestID,    // ngoài cùng: các middleware sau đều đọc được ID
 		logRequests,  // log cả response 500 do recoverPanic trả về
@@ -107,6 +111,12 @@ func routes(r *gin.Engine, d Deps) {
 
 	get(api, "/attachments/:id", downloadAttachment(d))
 	api.DELETE("/attachments/:id", deleteAttachment(d))
+
+	// realtime: lấy vé bằng access token, rồi mở WebSocket bằng vé (trình duyệt không gửi được
+	// header Authorization khi mở WebSocket). Giới hạn theo user áp cho cả lúc kết nối.
+	api.POST("/realtime/tickets", issueTicket(d.Realtime.Tickets))
+	v1.GET("/projects/:id/events", requireTicket(d.Realtime.Tickets),
+		rl.middleware(policy{"user", lim.User, true}, userKey), projectEvents(d.Projects, d.Realtime))
 }
 
 // get đăng ký h cho cả GET và HEAD. ServeMux tự cho HEAD dùng route GET, Gin thì không.

@@ -51,11 +51,13 @@ type Service struct {
 	files    Files
 	queue    Queue
 	notifier notify.Notifier
+	events   Publisher // nil: không gửi event
 }
 
 // NewService tạo Service từ các thành phần nó cần, main nối chúng lại lúc khởi động.
-func NewService(tasks Store, projects project.Store, users Users, files Files, queue Queue, notifier notify.Notifier) *Service {
-	return &Service{tasks: tasks, projects: projects, users: users, files: files, queue: queue, notifier: notifier}
+// events nhận event sau mỗi thay đổi, nil là không gửi.
+func NewService(tasks Store, projects project.Store, users Users, files Files, queue Queue, notifier notify.Notifier, events Publisher) *Service {
+	return &Service{tasks: tasks, projects: projects, users: users, files: files, queue: queue, notifier: notifier, events: events}
 }
 
 // Get trả về task id và project chứa nó. User không được xem task (CanView) nhận lỗi
@@ -96,7 +98,11 @@ func (s *Service) Create(ctx context.Context, userID int, t *Task) error {
 	if err := s.validate(ctx, userID, t, true); err != nil {
 		return err
 	}
-	return s.save(ctx, t, s.tasks.Add)
+	if err := s.save(ctx, t, s.tasks.Add); err != nil {
+		return err
+	}
+	s.publish(ctx, EventCreated, userID, *t)
+	return nil
 }
 
 // Changes là các thay đổi của một lần sửa task: field nil là giữ nguyên.
@@ -121,7 +127,7 @@ func (s *Service) Update(ctx context.Context, userID, id int, c Changes) (Task, 
 	if err != nil {
 		return Task{}, err
 	}
-	wasDone := t.IsDone() // trước khi sửa: chỉ báo khi task vừa chuyển sang done
+	wasDone, oldStatus := t.IsDone(), t.Status // trước khi sửa: chỉ báo khi task vừa chuyển sang done
 	if !c.onlyStatus() && !CanEdit(userID, p, t) {
 		return Task{}, &ForbiddenError{"người được giao chỉ được đổi status của task"}
 	}
@@ -156,6 +162,11 @@ func (s *Service) Update(ctx context.Context, userID, id int, c Changes) (Task, 
 	if !wasDone && t.IsDone() {
 		s.notifyDone(ctx, userID, t, p)
 	}
+	typ := EventUpdated
+	if t.Status != oldStatus {
+		typ = EventStatusChanged
+	}
+	s.publish(ctx, typ, userID, t)
 	return t, nil
 }
 
@@ -177,6 +188,7 @@ func (s *Service) Delete(ctx context.Context, userID, id int) error {
 		return err
 	}
 	s.files.Remove(ctx, names...)
+	s.publish(ctx, EventDeleted, userID, t)
 	return nil
 }
 
@@ -195,7 +207,12 @@ func (s *Service) AddTag(ctx context.Context, userID, id int, name string) (Task
 	if err := s.tasks.AddTag(ctx, id, name); err != nil {
 		return Task{}, err
 	}
-	return s.tasks.Get(ctx, id)
+	t, err = s.tasks.Get(ctx, id)
+	if err != nil {
+		return Task{}, err
+	}
+	s.publish(ctx, EventUpdated, userID, t)
+	return t, nil
 }
 
 // RemoveTag gỡ tag name khỏi task id, không lỗi khi task không có tag đó. Chỉ chủ project được gỡ tag.
@@ -207,7 +224,13 @@ func (s *Service) RemoveTag(ctx context.Context, userID, id int, name string) er
 	if !CanEdit(userID, p, t) {
 		return &ForbiddenError{"chỉ chủ project được sửa tag của task"}
 	}
-	return s.tasks.RemoveTag(ctx, id, NormalizeTag(name))
+	if err := s.tasks.RemoveTag(ctx, id, NormalizeTag(name)); err != nil {
+		return err
+	}
+	if t, err = s.tasks.Get(ctx, id); err == nil { // event mang task sau khi gỡ tag
+		s.publish(ctx, EventUpdated, userID, t)
+	}
+	return err
 }
 
 // validate kiểm tra t theo quy tắc của domain (t.Validate) và kiểm tra người được giao (nếu có)

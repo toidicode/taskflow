@@ -14,6 +14,9 @@ import (
 // báo /ready 503, ngừng nhận kết nối và chờ các request đang chạy, dừng việc nền.
 // Cả hai bước chờ dùng chung thời hạn timeout. Đóng database là việc của nơi gọi, sau khi serve trả về.
 func serve(ctx context.Context, srv *http.Server, ln net.Listener, a *app, delay, timeout time.Duration) error {
+	// Shutdown không chờ, cũng không đóng các kết nối đã bị hijack như WebSocket: nó chỉ gọi
+	// các hàm đăng ký ở đây (trong goroutine riêng). Hub báo mọi WebSocket gửi close frame rồi kết thúc.
+	srv.RegisterOnShutdown(a.hub.Close)
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 
@@ -38,6 +41,10 @@ func serve(ctx context.Context, srv *http.Server, ln net.Listener, a *app, delay
 		errs = append(errs, fmt.Errorf("HTTP server: %w", err))
 	}
 	<-errc // Serve đã trả về http.ErrServerClosed
+	// chờ các WebSocket gửi close frame xong (Hub.Close đã được Shutdown gọi)
+	if err := a.hub.Wait(sctx); err != nil {
+		errs = append(errs, fmt.Errorf("WebSocket: %w", err))
+	}
 	slog.Info("đã dừng HTTP server")
 
 	// 3. không còn handler nào Enqueue được nữa: dừng việc nền với thời gian còn lại

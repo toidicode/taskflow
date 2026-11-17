@@ -1,0 +1,9 @@
+# This file instructs Redocly's linter to ignore the rules contained for specific parts of your API.
+# See https://redocly.com/docs/cli/ for more information.
+# Hai cảnh báo của route WebSocket: response thành công là 101 (không phải 2xx), và TaskEvent là
+# message gửi qua WebSocket nên không response nào trỏ tới (OpenAPI không mô tả được message WebSocket).
+openapi.yaml:
+  operation-2xx-response:
+    - '#/paths/~1api~1v1~1projects~1{id}~1events/get/responses'
+  no-unused-components:
+    - '#/components/schemas/TaskEvent'

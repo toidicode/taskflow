@@ -21,6 +21,7 @@ import (
 	"github.com/toidicode/taskflow/internal/postgres"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/ratelimit"
+	"github.com/toidicode/taskflow/internal/realtime"
 	"github.com/toidicode/taskflow/internal/storage"
 	"github.com/toidicode/taskflow/internal/task"
 	"github.com/toidicode/taskflow/internal/user"
@@ -40,12 +41,15 @@ type app struct {
 	notifier    notify.Notifier    // gửi thông báo (trong job)
 	ready       *httpapi.Readiness // trả lời /ready, serve bật trạng thái đang tắt
 	rateLimit   httpapi.RateLimit  // giới hạn số request, Limiter nil là tắt
+	hub         *realtime.Hub      // kết nối WebSocket của bản API này
+	events      task.Publisher     // nơi task.Service gửi event: hub, hoặc Redis khi chạy nhiều bản
+	tickets     realtime.Tickets   // vé mở WebSocket
 }
 
 // handler tạo các service từ store rồi tạo handler HTTP của cả API.
 func (a *app) handler(tokens *auth.Tokens, corsOrigin string, trusted []netip.Prefix) http.Handler {
 	tasks := task.NewService(a.tasks, a.projects, a.users,
-		attachment.Files{Store: a.attachments, Storage: a.files}, a.jobs, a.notifier)
+		attachment.Files{Store: a.attachments, Storage: a.files}, a.jobs, a.notifier, a.events)
 	projects := project.NewService(a.projects, tasks) // *task.Service có HasTasks: thỏa project.Tasks
 	return httpapi.New(httpapi.Deps{
 		Tasks:       tasks,
@@ -56,6 +60,7 @@ func (a *app) handler(tokens *auth.Tokens, corsOrigin string, trusted []netip.Pr
 		Tokens:      tokens,
 		Ready:       a.ready,
 		RateLimit:   a.rateLimit,
+		Realtime:    httpapi.Realtime{Hub: a.hub, Tickets: a.tickets},
 	}, corsOrigin, trusted)
 }
 
@@ -99,13 +104,15 @@ func openApp(ctx context.Context, cfg Config) (*app, error) {
 func memoryApp(files storage.Storage) *app {
 	projects, tasks := project.NewMemoryStore(), task.NewMemoryStore()
 	tasks.SetProjectFunc(projectLookup(projects)) // để lọc task theo quyền (Filter.VisibleTo)
-	return &app{projects: projects, tasks: tasks, users: user.NewMemoryStore(),
+	a := &app{projects: projects, tasks: tasks, users: user.NewMemoryStore(),
 		attachments: attachment.NewMemoryStore(), files: files, ready: httpapi.NewReadiness(nil)}
+	a.useLocalRealtime()
+	return a
 }
 
 // dbApp tạo app với các store lưu trong PostgreSQL qua db.
 func dbApp(db *sql.DB, files storage.Storage) *app {
-	return &app{
+	a := &app{
 		projects:    postgres.NewProjectStore(db),
 		tasks:       postgres.NewTaskStore(db),
 		users:       postgres.NewUserStore(db),
@@ -114,6 +121,24 @@ func dbApp(db *sql.DB, files storage.Storage) *app {
 		db:          db,
 		ready:       httpapi.NewReadiness(db),
 	}
+	a.useLocalRealtime()
+	return a
+}
+
+// useLocalRealtime cho a một Hub nhận event thẳng từ task.Service và vé trong bộ nhớ: đủ khi chạy một bản API.
+func (a *app) useLocalRealtime() {
+	a.hub = realtime.NewHub(realtime.Options{})
+	a.events = a.hub
+	a.tickets = realtime.NewMemoryTickets()
+}
+
+// useRedisRealtime chuyển event và vé sang Redis để nhiều bản API dùng chung. Trả về hàm nhận event
+// từ Redis, chạy trong goroutine riêng cho tới khi ctx bị hủy.
+func (a *app) useRedisRealtime(rc *cache.Redis, prefix string) func(ctx context.Context) {
+	broker := realtime.NewRedis(rc.Client(), prefix+"events", a.hub)
+	a.events = broker
+	a.tickets = realtime.NewRedisTickets(rc.Client(), prefix+"ticket:")
+	return broker.Run
 }
 
 // connectRedis tạo client Redis cho url, dùng chung cho cache và rate limit. Redis chưa chạy lúc

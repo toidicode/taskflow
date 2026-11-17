@@ -66,11 +66,28 @@ func TestContract(t *testing.T) {
 		"assignee_id": 2, "due_date": "2026-12-01T17:00:00Z", "tags": []string{"Docs"}}, http.StatusCreated)
 	tp := fmt.Sprintf("/api/v1/tasks/%d", tk.ID)
 	call[page[task.Task]](an, "GET", pp+"/tasks?limit=1", nil, http.StatusOK)
+
+	// WebSocket: 101 khi mở được, các lỗi trước khi upgrade là response HTTP bình thường
+	events, code := dialEvents(an, p.ID, nil)
+	if code != http.StatusSwitchingProtocols {
+		t.Fatalf("An mở WebSocket: %d", code)
+	}
+	defer events.CloseNow()
+	if _, code := dialEvents(binh, p.ID, nil); code != http.StatusNotFound {
+		t.Errorf("Bình mở WebSocket project của An: %d, muốn 404", code)
+	}
+	if _, code := dialEvents(an, p.ID, http.Header{"Origin": {"https://evil.example"}}); code != http.StatusForbidden {
+		t.Errorf("Origin lạ: %d, muốn 403", code)
+	}
+	an.do("GET", pp+"/events?ticket="+newTicket(an), "", nil, http.StatusUpgradeRequired)
+	an.do("GET", "/api/v1/projects/abc/events?ticket="+newTicket(an), "", nil, http.StatusBadRequest)
+	anon.do("GET", pp+"/events?ticket=ve-tu-che", "", nil, http.StatusUnauthorized)
 	call[page[task.Task]](binh, "GET", "/api/v1/tasks?status=todo&tag=docs", nil, http.StatusOK)
 	an.do("GET", "/api/v1/tasks?limit=0", "", nil, http.StatusBadRequest)
 	call[task.Task](binh, "GET", tp, nil, http.StatusOK)
 	call[struct{}](binh, "PATCH", tp, map[string]any{"title": "Đổi tên"}, http.StatusForbidden) // người được giao chỉ đổi status
 	call[task.Task](an, "PATCH", tp, map[string]any{"status": "doing", "due_date": nil}, http.StatusOK)
+	checkEvent(t, events, "task.status_changed") // message WebSocket cũng phải khớp schema TaskEvent
 	call[task.Task](an, "POST", tp+"/tags", map[string]string{"name": "Backend"}, http.StatusOK)
 	call[struct{}](an, "POST", tp+"/tags", map[string]string{"name": " "}, http.StatusUnprocessableEntity)
 	an.do("DELETE", tp+"/tags/backend", "", nil, http.StatusNoContent)
@@ -153,6 +170,10 @@ func (c *contract) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := c.next.RoundTrip(req)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode == http.StatusSwitchingProtocols { // WebSocket: body là chính kết nối, không đọc
+		c.check(req, reqBody, resp, nil)
+		return resp, nil
 	}
 	respBody, err := io.ReadAll(resp.Body)
 	resp.Body.Close()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/cache"
@@ -117,12 +120,16 @@ func TestEndToEnd(t *testing.T) {
 			a.projects = project.NewCachedStore(a.projects, cache.NewMemory(), project.CacheOptions{})
 			return a
 		}},
-		{"postgres+redis", func(t *testing.T) *app { // cache và rate limit đều trong Redis
+		{"postgres+redis", func(t *testing.T) *app { // cache, rate limit và event realtime đều qua Redis
 			rc, prefix := testredis.New(t)
 			a := dbApp(testdb.New(t), newTestFiles(t))
 			a.projects = project.NewCachedStore(a.projects, rc, project.CacheOptions{Prefix: prefix})
 			a.rateLimit = rateLimit(nil, e2eLimits)
 			a.rateLimit.Limiter = ratelimit.NewRedis(rc.Client(), prefix+"ratelimit:")
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			go a.useRedisRealtime(rc, prefix)(ctx)
+			testredis.WaitSubscribers(t, rc, prefix+"events", 1)
 			return a
 		}},
 	}
@@ -133,7 +140,8 @@ func TestEndToEnd(t *testing.T) {
 			if s.rateLimit.Limiter == nil {
 				s.rateLimit = rateLimit(nil, e2eLimits) // đếm trong bộ nhớ
 			}
-			srv := httptest.NewServer(s.handler(testTokens, "http://localhost:5173", nil))
+			h, requests := track(s.handler(testTokens, "http://localhost:5173", nil))
+			srv := httptest.NewServer(h)
 			t.Cleanup(func() { // đăng ký trước nên chạy sau srv.Close
 				if t.Failed() {
 					t.Logf("log của server:\n%s", logs)
@@ -173,6 +181,16 @@ func TestEndToEnd(t *testing.T) {
 			tk := call[task.Task](an, "POST", "/api/v1/tasks",
 				map[string]any{"project_id": p.ID, "title": "Viết test end-to-end", "assignee_id": 2}, http.StatusCreated)
 
+			// An (chủ project) mở WebSocket theo dõi project; Bình chỉ là người được giao task,
+			// không xem được project nên không mở được (404 như mọi route khác)
+			events, code := dialEvents(an, p.ID, http.Header{"Origin": {"http://localhost:5173"}})
+			if code != http.StatusSwitchingProtocols {
+				t.Fatalf("An mở WebSocket: %d", code)
+			}
+			if _, code := dialEvents(binh, p.ID, nil); code != http.StatusNotFound {
+				t.Errorf("Bình mở WebSocket: %d, muốn 404", code)
+			}
+
 			// Bình (người được giao) đính kèm file rồi chuyển task sang done
 			const content = "Báo cáo: test đã chạy qua HTTP thật\n"
 			data := binh.do("POST", fmt.Sprintf("/api/v1/tasks/%d/attachments", tk.ID),
@@ -186,6 +204,12 @@ func TestEndToEnd(t *testing.T) {
 			if done.Status != task.StatusDone || done.CompletedAt.IsZero() {
 				t.Errorf("sau PATCH: %+v", done)
 			}
+			// An nhận ngay event qua WebSocket (bản postgres+redis: qua Redis Pub/Sub)
+			e := checkEvent(t, events, "task.status_changed")
+			if e["task_id"] != float64(tk.ID) || e["by"] != 2.0 || e["task"].(map[string]any)["status"] != "done" {
+				t.Errorf("event sau PATCH: %v", e)
+			}
+			events.Close(websocket.StatusNormalClosure, "")
 
 			// An (chủ project) thấy task đã xong và tải được đúng file Bình gửi
 			list := call[page[task.Task]](an, "GET", "/api/v1/tasks?status=done", nil, http.StatusOK)
@@ -217,6 +241,21 @@ func TestEndToEnd(t *testing.T) {
 			resp.Body.Close()
 			if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") == "" {
 				t.Errorf("lần đoán thứ ba: %d, Retry-After %q; muốn 429 có Retry-After", resp.StatusCode, resp.Header.Get("Retry-After"))
+			}
+
+			// log của WebSocket (status 101, ghi khi kết nối đóng) không chứa vé
+			requests.Wait()
+			ws := 0
+			for _, e := range logEntries(t, bytes.NewBuffer(logs.Bytes())) { // bản sao: không làm cạn logs
+				if e["status"] == 101.0 {
+					ws++
+					if p, _ := e["path"].(string); !strings.HasSuffix(p, "?ticket=REDACTED") {
+						t.Errorf("log WebSocket ghi path %q", p)
+					}
+				}
+			}
+			if ws != 1 {
+				t.Errorf("có %d dòng log WebSocket, muốn 1", ws)
 			}
 
 			// server thật hỗ trợ đặt deadline cho từng request (Bài 35), cache, rate limit không lỗi: không có

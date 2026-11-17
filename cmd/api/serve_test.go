@@ -11,7 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/toidicode/taskflow/internal/jobs"
+	"github.com/toidicode/taskflow/internal/project"
+	"github.com/toidicode/taskflow/internal/task"
 )
 
 // slowServer chạy serve trên một cổng ngẫu nhiên với route GET /slow: báo started khi bắt đầu
@@ -97,6 +101,55 @@ func TestServeWaitsForRequests(t *testing.T) {
 	}
 	if err := s.jobs.Enqueue(jobs.Job{Name: "muộn"}); !errors.Is(err, jobs.ErrStopped) {
 		t.Errorf("Enqueue sau khi tắt: %v, muốn ErrStopped", err)
+	}
+}
+
+// TestServeClosesWebSockets: WebSocket sống qua WriteTimeout của server (net/http xóa deadline khi
+// hijack), và khi tắt server thì client nhận close 1001 thay vì bị cắt ngang.
+func TestServeClosesWebSockets(t *testing.T) {
+	captureLog(t)
+	a := newTestApp(t)
+	bg := context.Background()
+	p := project.New("TaskFlow API", 1)
+	if err := a.projects.Add(bg, p); err != nil {
+		t.Fatal(err)
+	}
+	ticket, _ := a.tickets.Issue(bg, 1)
+
+	ctx, cancel := context.WithCancel(bg)
+	defer cancel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultConfig()
+	cfg.WriteTimeout = 100 * time.Millisecond
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, newServer(cfg, a.handler(testTokens, "", nil)), ln, a, 0, 5*time.Second) }()
+
+	u := fmt.Sprintf("ws://%s/api/v1/projects/%d/events?ticket=%s", ln.Addr(), p.ID, ticket)
+	conn, _, err := websocket.Dial(bg, u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+
+	time.Sleep(300 * time.Millisecond) // quá WriteTimeout 100ms
+	a.hub.Publish(bg, task.Event{Type: task.EventDeleted, ProjectID: p.ID, TaskID: 9, By: 1})
+	rctx, rcancel := context.WithTimeout(bg, 5*time.Second)
+	defer rcancel()
+	if _, msg, err := conn.Read(rctx); err != nil {
+		t.Fatalf("sau WriteTimeout: %v, muốn kết nối còn sống", err)
+	} else if want := `{"type":"task.deleted","project_id":1,"task_id":9,"by":1}`; string(msg) != want {
+		t.Errorf("message = %s", msg)
+	}
+
+	cancel() // như nhận SIGTERM
+	if _, _, err := conn.Read(rctx); websocket.CloseStatus(err) != websocket.StatusGoingAway {
+		t.Errorf("khi tắt server: %v, muốn close 1001", err)
+	}
+	if err := <-done; err != nil {
+		t.Errorf("serve: %v", err)
 	}
 }
 
