@@ -98,7 +98,14 @@ func TestNewAPIClientIP(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "203.0.113.7")
 	api.ServeHTTP(httptest.NewRecorder(), req)
 
-	entries := logEntries(t, logs)
+	// chỉ xét dòng log của /health: kết nối WebSocket của test chạy trước (-shuffle) có thể ghi log
+	// lúc đóng muộn, rơi vào logger mà test này đang bắt
+	var entries []map[string]any
+	for _, e := range logEntries(t, logs) {
+		if e["path"] == "/health" {
+			entries = append(entries, e)
+		}
+	}
 	if len(entries) != 1 || entries[0]["client_ip"] != "203.0.113.7" {
 		t.Errorf("log = %v, muốn client_ip 203.0.113.7", entries)
 	}

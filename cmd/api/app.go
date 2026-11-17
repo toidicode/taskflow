@@ -44,6 +44,7 @@ type app struct {
 	hub         *realtime.Hub      // kết nối WebSocket của bản API này
 	events      task.Publisher     // nơi task.Service gửi event: hub, hoặc Redis khi chạy nhiều bản
 	tickets     realtime.Tickets   // vé mở WebSocket
+	webDir      string             // dev: thư mục template dashboard, rỗng là dùng bản nhúng
 }
 
 // taskService tạo task.Service từ các store của a.
@@ -66,6 +67,7 @@ func (a *app) handler(tokens *auth.Tokens, corsOrigin string, trusted []netip.Pr
 		Ready:       a.ready,
 		RateLimit:   a.rateLimit,
 		Realtime:    httpapi.Realtime{Hub: a.hub, Tickets: a.tickets},
+		WebDir:      a.webDir,
 	}, corsOrigin, trusted)
 }
 

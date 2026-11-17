@@ -11,7 +11,7 @@ import (
 
 const (
 	issuer   = "taskflow"     // iss: ai phát token
-	audience = "taskflow-api" // aud: token dùng cho dịch vụ nào
+	audience = "taskflow-api" // aud mặc định: token dùng cho dịch vụ nào
 )
 
 // ErrInvalidToken được trả về (đã wrap lỗi gốc của jwt) khi token không dùng được.
@@ -19,14 +19,23 @@ var ErrInvalidToken = errors.New("token không hợp lệ")
 
 // Tokens phát và kiểm tra access token dạng JWT, ký bằng HS256 với một secret.
 type Tokens struct {
-	secret []byte
-	ttl    time.Duration
-	now    func() time.Time // test thay bằng đồng hồ giả
+	secret   []byte
+	ttl      time.Duration
+	audience string
+	now      func() time.Time // test thay bằng đồng hồ giả
 }
 
 // NewTokens tạo Tokens ký bằng secret, token hết hạn sau ttl.
 func NewTokens(secret []byte, ttl time.Duration) *Tokens {
-	return &Tokens{secret: secret, ttl: ttl, now: time.Now}
+	return &Tokens{secret: secret, ttl: ttl, audience: audience, now: time.Now}
+}
+
+// ForAudience trả về bản sao của t (cùng secret) phát và chỉ nhận token có aud là aud, sống ttl.
+// VD session của trang web (Bài 48): token của API không dùng làm session được, và ngược lại.
+func (t *Tokens) ForAudience(aud string, ttl time.Duration) *Tokens {
+	c := *t
+	c.audience, c.ttl = aud, ttl
+	return &c
 }
 
 // TTL là thời gian sống của một token.
@@ -38,7 +47,7 @@ func (t *Tokens) Issue(userID int) (string, error) {
 	claims := jwt.RegisteredClaims{
 		Issuer:    issuer,
 		Subject:   strconv.Itoa(userID), // sub là chuỗi theo chuẩn JWT
-		Audience:  jwt.ClaimStrings{audience},
+		Audience:  jwt.ClaimStrings{t.audience},
 		IssuedAt:  jwt.NewNumericDate(now),
 		ExpiresAt: jwt.NewNumericDate(now.Add(t.ttl)),
 	}
@@ -55,7 +64,7 @@ func (t *Tokens) Verify(token string) (int, error) {
 		// token không có exp thì không bao giờ hết hạn: từ chối
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuer(issuer),
-		jwt.WithAudience(audience),
+		jwt.WithAudience(t.audience),
 		jwt.WithTimeFunc(t.now),
 	)
 	if err != nil {

@@ -1,0 +1,12 @@
+{{define "title"}}Project của bạn - TaskFlow{{end}}
+
+{{define "content"}}
+<h1>Project của bạn</h1>
+<ul>
+  {{range .Projects}}
+  <li><a href="/app/projects/{{.ID}}">{{.Name}}</a></li>
+  {{else}}
+  <li>Chưa có project nào.</li>
+  {{end}}
+</ul>
+{{end}}

@@ -31,6 +31,9 @@ func TestOpenAPIRoutes(t *testing.T) {
 		if r.Method == http.MethodHead { // get() đăng ký HEAD kèm mọi GET
 			continue
 		}
+		if r.Path == "/app" || strings.HasPrefix(r.Path, "/app/") { // dashboard HTML (Bài 48), không phải JSON API
+			continue
+		}
 		route := r.Method + " " + ginToOpenAPI(r.Path)
 		if !notDocumented[route] {
 			routes = append(routes, route)

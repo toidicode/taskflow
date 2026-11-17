@@ -45,6 +45,7 @@ type Config struct {
 	ShutdownTimeout time.Duration // thời gian tối đa để tắt server: chờ request đang chạy và việc nền
 	ShutdownDelay   time.Duration // báo /ready 503 rồi chờ chừng này trước khi ngừng nhận kết nối
 	TrustedProxies  string        // IP/CIDR của reverse proxy được tin header X-Forwarded-For, cách nhau bởi dấu phẩy
+	WebDir          string        // dev: đọc template dashboard từ thư mục này thay vì bản nhúng, parse lại mỗi request
 
 	Migrate     bool // chạy migration rồi thoát, không chạy server
 	HealthCheck bool // gọi /ready của server đang chạy rồi thoát với code 0 (ổn) hoặc 1
@@ -113,6 +114,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	env.duration("TASKFLOW_SHUTDOWN_TIMEOUT", &cfg.ShutdownTimeout)
 	env.duration("TASKFLOW_SHUTDOWN_DELAY", &cfg.ShutdownDelay)
 	env.str("TASKFLOW_TRUSTED_PROXIES", &cfg.TrustedProxies)
+	env.str("TASKFLOW_WEB_DIR", &cfg.WebDir)
 	if err := errors.Join(env.errs...); err != nil {
 		return cfg, err
 	}
@@ -140,6 +142,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "thời gian tối đa để tắt server (TASKFLOW_SHUTDOWN_TIMEOUT)")
 	fs.DurationVar(&cfg.ShutdownDelay, "shutdown-delay", cfg.ShutdownDelay, "chờ sau khi /ready trả 503, trước khi ngừng nhận kết nối (TASKFLOW_SHUTDOWN_DELAY)")
 	fs.StringVar(&cfg.TrustedProxies, "trusted-proxies", cfg.TrustedProxies, "IP/CIDR của reverse proxy, cách nhau bởi dấu phẩy (TASKFLOW_TRUSTED_PROXIES)")
+	fs.StringVar(&cfg.WebDir, "web-dir", cfg.WebDir, "chỉ khi dev: thư mục template dashboard, VD internal/httpapi/web (TASKFLOW_WEB_DIR)")
 	// DatabaseURL, JWTSecret, RedisURL cố ý không có flag: tham số dòng lệnh lộ ra trong ps
 	// Migrate chỉ có flag: là một lệnh chạy một lần chứ không phải cấu hình lâu dài
 	fs.BoolVar(&cfg.Migrate, "migrate", false, "chạy migration database rồi thoát")
@@ -303,6 +306,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("queue_size", c.QueueSize),
 		slog.String("cleanup_interval", c.CleanupEvery.String()),
 		slog.String("remind_schedule", c.RemindAt),
+		slog.String("web_dir", c.WebDir),
 		slog.String("redis_url", hidden(c.RedisURL)),
 		slog.String("cache_ttl", c.CacheTTL.String()),
 		slog.String("rate_auth_ip", c.RateAuthIP.String()),

@@ -30,6 +30,7 @@ type Deps struct {
 	Ready       *Readiness // trả lời /ready
 	RateLimit   RateLimit  // giới hạn số request, Limiter nil là tắt
 	Realtime    Realtime   // WebSocket: hub và vé kết nối
+	WebDir      string     // dev: đọc template dashboard từ thư mục này, parse lại mỗi request
 }
 
 // New tạo handler của cả API: một *gin.Engine (cũng là http.Handler) với các middleware dùng chung,
@@ -117,6 +118,8 @@ func routes(r *gin.Engine, d Deps) {
 	api.POST("/realtime/tickets", issueTicket(d.Realtime.Tickets))
 	v1.GET("/projects/:id/events", requireTicket(d.Realtime.Tickets),
 		rl.middleware(policy{"user", lim.User, true}, userKey), projectEvents(d.Projects, d.Realtime))
+
+	webRoutes(r, d) // dashboard HTML dưới /app (web.go)
 }
 
 // get đăng ký h cho cả GET và HEAD. ServeMux tự cho HEAD dùng route GET, Gin thì không.

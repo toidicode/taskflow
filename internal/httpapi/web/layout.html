@@ -1,0 +1,25 @@
+{{define "layout"}}<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false}'>
+<title>{{block "title" .}}TaskFlow{{end}}</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/app/static/app.css">
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js" integrity="sha384-2OatzQy1H+Zd/IIrjr1TcuDGqLXeHhbooAyJY1KdQMKnr4LZ22k31GBLdYKHmVjg" crossorigin="anonymous" defer></script>
+</head>
+<body>
+<header>
+  <a href="/app">TaskFlow</a>
+  {{if .User.ID}}
+  <span>{{.User.Name}}</span>
+  <form method="post" action="/app/logout"><button>Đăng xuất</button></form>
+  {{end}}
+</header>
+<main>
+{{block "content" .}}{{end}}
+</main>
+</body>
+</html>
+{{end}}

@@ -127,6 +127,7 @@ func run(cfg Config) error {
 		return fmt.Errorf("hàng đợi: %w", err)
 	}
 
+	a.webDir = cfg.WebDir
 	tokens := auth.NewTokens([]byte(cfg.JWTSecret), cfg.JWTTTL)
 	trusted, _ := httpapi.ParseTrustedProxies(cfg.TrustedProxies) // đã kiểm tra trong loadConfig
 	srv := newServer(cfg, a.handler(tokens, cfg.CORSOrigin, trusted))

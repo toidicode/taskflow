@@ -1,0 +1,22 @@
+{{define "title"}}{{.Project.Name}} - TaskFlow{{end}}
+
+{{define "content"}}
+<h1>{{.Project.Name}}</h1>
+{{with .Project.Description}}<p>{{.}}</p>{{end}}
+
+<table>
+  <thead><tr><th>#</th><th>Task</th><th>Hạn</th><th>Trạng thái</th></tr></thead>
+  <tbody>
+    {{range .Tasks}}{{template "task-row" .}}{{else}}<tr><td colspan="4">Chưa có task nào.</td></tr>{{end}}
+  </tbody>
+</table>
+
+<h2>Thêm task</h2>
+<form method="post" action="/app/projects/{{.Project.ID}}/tasks">
+  <label>Tiêu đề <input name="title" value="{{.Form.Get "title"}}" maxlength="200"></label>
+  {{with .Errors.title}}<p class="error">{{.}}</p>{{end}}
+  <label>Hạn <input type="date" name="due_date" value="{{.Form.Get "due_date"}}"></label>
+  {{with .Errors.due_date}}<p class="error">{{.}}</p>{{end}}
+  <button>Thêm task</button>
+</form>
+{{end}}

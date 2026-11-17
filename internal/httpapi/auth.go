@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -84,13 +85,12 @@ func login(users user.Store, tokens *auth.Tokens, rl RateLimit) gin.HandlerFunc 
 		if !rl.allow(c, emailPolicy, rl.emailKey(email)) {
 			return
 		}
-		u, err := users.GetByEmail(c.Request.Context(), email)
-		if err != nil && !errors.Is(err, user.ErrNotFound) {
+		u, ok, err := authenticate(c.Request.Context(), users, email, in.Password)
+		if err != nil {
 			writeError(c, err)
 			return
 		}
-		// không có user thì u.PasswordHash rỗng: CheckPassword vẫn chạy bcrypt rồi trả false
-		if !auth.CheckPassword(u.PasswordHash, in.Password) {
+		if !ok {
 			unauthorized(c, false, "email hoặc mật khẩu không đúng")
 			return
 		}
@@ -105,6 +105,20 @@ func login(users user.Store, tokens *auth.Tokens, rl RateLimit) gin.HandlerFunc 
 			ExpiresIn:   int(tokens.TTL().Seconds()),
 		})
 	}
+}
+
+// authenticate kiểm tra email (đã chuẩn hóa) và mật khẩu, dùng chung cho API và trang web.
+// Sai email hay sai mật khẩu đều trả ok = false; err khác nil chỉ khi store lỗi.
+func authenticate(ctx context.Context, users user.Store, email, password string) (u user.User, ok bool, err error) {
+	u, err = users.GetByEmail(ctx, email)
+	if err != nil && !errors.Is(err, user.ErrNotFound) {
+		return user.User{}, false, err
+	}
+	// không có user thì u.PasswordHash rỗng: CheckPassword vẫn chạy bcrypt rồi trả false
+	if !auth.CheckPassword(u.PasswordHash, password) {
+		return user.User{}, false, nil
+	}
+	return u, true, nil
 }
 
 // me trả về user đang đăng nhập.

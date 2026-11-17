@@ -1,0 +1,18 @@
+{{/* Một dòng task: dùng trong trang project và trả riêng cho htmx sau khi đổi status. */}}
+{{define "task-row" -}}
+<tr id="task-{{.ID}}">
+  <td>{{.ID}}</td>
+  <td>{{.Title}}{{range .Tags}} <span class="tag">{{.}}</span>{{end}}</td>
+  <td>{{if not .DueDate.IsZero}}{{.DueDate.Format "02/01/2006"}}{{end}}</td>
+  <td>
+    <form method="post" action="/app/tasks/{{.ID}}/status"
+          hx-post="/app/tasks/{{.ID}}/status" hx-target="closest tr" hx-swap="outerHTML">
+      <select name="status">
+        {{- $current := .Status}}
+        {{range statuses}}<option value="{{.}}"{{if eq . $current}} selected{{end}}>{{statusLabel .}}</option>{{end}}
+      </select>
+      <button>Lưu</button>
+    </form>
+  </td>
+</tr>
+{{end}}

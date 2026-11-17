@@ -1,0 +1,11 @@
+{{define "title"}}Đăng nhập - TaskFlow{{end}}
+
+{{define "content"}}
+<h1>Đăng nhập</h1>
+{{with .Message}}<p class="error">{{.}}</p>{{end}}
+<form method="post" action="/app/login">
+  <label>Email <input type="email" name="email" value="{{.Form.Get "email"}}" autocomplete="username" required></label>
+  <label>Mật khẩu <input type="password" name="password" autocomplete="current-password" required></label>
+  <button>Đăng nhập</button>
+</form>
+{{end}}

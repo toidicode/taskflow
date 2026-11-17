@@ -109,3 +109,23 @@ func TestTokens(t *testing.T) {
 		t.Errorf("sau 15 phút: lỗi = %v, muốn ErrTokenExpired", err)
 	}
 }
+
+// TestForAudience: token của một aud không dùng được cho aud khác dù cùng secret.
+func TestForAudience(t *testing.T) {
+	api := NewTokens([]byte("secret-chi-dung-trong-test-0123456789"), time.Minute)
+	web := api.ForAudience("taskflow-web", time.Hour)
+	if web.TTL() != time.Hour || api.TTL() != time.Minute {
+		t.Fatalf("TTL: web %v, api %v", web.TTL(), api.TTL())
+	}
+	webToken, _ := web.Issue(7)
+	apiToken, _ := api.Issue(7)
+	if id, err := web.Verify(webToken); err != nil || id != 7 {
+		t.Errorf("web.Verify(web token) = %d, %v", id, err)
+	}
+	if _, err := api.Verify(webToken); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("api.Verify(web token): %v, muốn ErrInvalidToken", err)
+	}
+	if _, err := web.Verify(apiToken); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("web.Verify(api token): %v, muốn ErrInvalidToken", err)
+	}
+}
