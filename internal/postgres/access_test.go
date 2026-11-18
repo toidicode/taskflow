@@ -124,6 +124,9 @@ func TestMigrationForeignKeys(t *testing.T) {
 		}
 		assignees = append(assignees, id)
 	}
+	if err := rows.Err(); err != nil { // vòng lặp dừng vì lỗi (mất kết nối...) chứ không phải hết dòng
+		t.Fatal(err)
+	}
 	if !slices.Equal(assignees, []int64{1, 0}) {
 		t.Errorf("assignee_id sau migration = %v, muốn [1 0] (user #7 không tồn tại → NULL)", assignees)
 	}

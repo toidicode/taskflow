@@ -1,5 +1,6 @@
 # TaskFlow API trên VPS: PostgreSQL + Redis + migration + API + notifier (gRPC) + Caddy (HTTPS).
-# Deploy: docker compose pull migrate api notifier && docker compose run --rm migrate && docker compose up -d
+# Deploy: ./deploy.sh 0.53.0 (Bài 53, GitHub Actions gọi qua SSH), tức là
+#   docker compose pull migrate api notifier && docker compose run --rm migrate && docker compose up -d
 
 # giới hạn log của mọi container: tối đa 3 file x 10 MB
 x-logging: &logging

@@ -5,11 +5,14 @@
 # ---- stage 1: build ----
 FROM golang:1.27.4 AS build
 WORKDIR /src
+# tải module thành một layer riêng (Bài 53): go.mod, go.sum không đổi thì layer này lấy từ cache,
+# kể cả cache của GitHub Actions (cache mount bên dưới không được lưu vào cache của CI)
+COPY go.mod go.sum ./
+RUN go mod download
 COPY . .
 ARG VERSION
-# cache mount: module đã tải và cache biên dịch được giữ lại giữa các lần build, không nằm trong image
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
+# cache mount: cache biên dịch được giữ lại giữa các lần build trên cùng máy, không nằm trong image
+RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/ ./cmd/api ./cmd/notifier \
     && mkdir -p /out/data/uploads
 

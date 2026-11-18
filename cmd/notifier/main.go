@@ -71,7 +71,9 @@ func main() {
 	defer func() {
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		shutdownTracing(sctx)
+		if err := shutdownTracing(sctx); err != nil {
+			slog.Warn("tracing: gửi nốt span", "err", err)
+		}
 	}()
 
 	lis, err := net.Listen("tcp", addr)

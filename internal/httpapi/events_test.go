@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,13 +20,24 @@ import (
 // eventsServer chạy cả API (đủ middleware, frontend ở http://localhost:5173) qua HTTP thật:
 // WebSocket cần kết nối TCP thật để hijack, httptest.ResponseRecorder không làm được.
 // change sửa Deps trước khi tạo handler (nil là giữ nguyên).
+//
+// srv.Close không chờ kết nối đã bị hijack: handler WebSocket còn chạy sau khi test kết thúc và ghi
+// dòng log "request" vào slog.Default của test chạy sau (TestLogRequests, TestRecoverPanic thấy thừa
+// một dòng, -race báo data race). Cleanup chờ mọi handler trả về rồi mới cho test kết thúc.
 func eventsServer(t *testing.T, change func(*Deps)) (*httptest.Server, Deps) {
 	t.Helper()
 	d := newTestStores(t).deps(testTokens) // user #1 (An) là chủ project #1, #2
 	if change != nil {
 		change(&d)
 	}
-	srv := httptest.NewServer(New(d, "http://localhost:5173", nil))
+	h := New(d, "http://localhost:5173", nil)
+	var running sync.WaitGroup
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		running.Add(1)
+		defer running.Done()
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(running.Wait) // đăng ký trước nên chạy sau srv.Close và sau khi các WebSocket đã đóng
 	t.Cleanup(srv.Close)
 	return srv, d
 }

@@ -583,6 +583,7 @@ components:
   headers:
     Location:
       description: Đường dẫn của tài nguyên vừa tạo
+      required: true # 201 nào cũng có, thiếu là contract test báo lỗi
       schema: {type: string}
     RateLimit:
       description: 'Trạng thái của từng luật, VD `"login-ip";r=3;t=5` (r: còn lại; t: trong t giây tới chỉ đi được tối đa r request, không có nghĩa là đầy lại sau t giây)'

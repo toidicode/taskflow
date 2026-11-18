@@ -92,7 +92,7 @@ func recoverPanic(c *gin.Context) {
 		if err == nil {
 			return
 		}
-		if err == http.ErrAbortHandler {
+		if err == http.ErrAbortHandler { //nolint:errorlint // giá trị của recover(), không bị bọc; net/http cũng so bằng ==
 			panic(err) // panic có chủ đích để hủy response, trả lại cho net/http
 		}
 		requestLogger(c).Error("panic", "err", err, "stack", string(debug.Stack()))

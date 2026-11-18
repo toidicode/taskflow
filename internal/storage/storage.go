@@ -62,7 +62,7 @@ func (d *Disk) Save(ctx context.Context, name string, r io.Reader) (int64, error
 		err = closeErr // ổ đĩa đầy có thể chỉ lộ ra lúc Close
 	}
 	if err != nil {
-		d.root.Remove(name) // không để lại file dở dang
+		_ = d.root.Remove(name) // không để lại file dở dang; lỗi quan trọng là err ở trên
 		return n, err
 	}
 	return n, nil

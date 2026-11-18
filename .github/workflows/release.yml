@@ -1,0 +1,81 @@
+# Release của TaskFlow (Bài 53): đẩy tag v1.2.3 thì chạy lại CI, build image, đẩy lên ghcr.io,
+# rồi deploy lên VPS qua SSH (environment "production", có thể bắt duyệt tay).
+#   git tag v0.53.0 && git push origin v0.53.0
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency: # hai tag đẩy sát nhau: chạy lần lượt, không hủy deploy đang chạy dở
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml # đúng các job của CI, trên commit được gắn tag
+
+  image:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # đẩy image lên ghcr.io bằng GITHUB_TOKEN
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/taskflow-api
+          tags: | # tag v0.53.0 → image 0.53.0 và 0.53
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64 # VPS là amd64 (Bài 39)
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production # secret, biến và luật duyệt khai báo trong Settings → Environments
+      url: ${{ vars.TASKFLOW_URL }}
+    steps:
+      - name: SSH key
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Deploy
+        env:
+          VERSION: ${{ needs.image.outputs.version }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+        # authorized_keys trên server ép key này chỉ chạy deploy/deploy.sh, VERSION là tham số duy nhất
+        run: ssh -o BatchMode=yes "deploy@$DEPLOY_HOST" "$VERSION"
+      - name: Kiểm tra sau deploy
+        env:
+          TASKFLOW_URL: ${{ vars.TASKFLOW_URL }}
+        run: curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 3 "$TASKFLOW_URL/health"

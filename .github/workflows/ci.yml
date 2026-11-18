@@ -1,0 +1,97 @@
+# CI của TaskFlow (Bài 53): lint, test với PostgreSQL + Redis thật, kiểm tra code sinh ra và tài liệu,
+# quét lỗ hổng. Chạy trên mỗi pull request, mỗi lần push lên master, mỗi tuần (lỗ hổng mới được công bố),
+# và được release.yml gọi lại trước khi build image.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: "0 2 * * 1" # 9h sáng thứ Hai giờ Việt Nam (cron của GitHub tính theo UTC)
+  workflow_call: # release.yml gọi lại workflow này
+
+permissions:
+  contents: read # GITHUB_TOKEN chỉ đọc được code
+
+concurrency: # push thêm commit vào PR: hủy lần chạy cũ của PR đó
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod # Go 1.27.4 như dòng go trong go.mod
+      - name: go vet
+        run: go vet ./...
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0 # cấu hình trong .golangci.yml
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services: # container chạy cạnh job, xóa khi job xong
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: taskflow
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: taskflow_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U taskflow -d taskflow_test"
+          --health-interval 2s --health-timeout 5s --health-retries 15
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      TASKFLOW_TEST_DATABASE_URL: postgres://taskflow:secret@localhost:5432/taskflow_test?sslmode=disable
+      TASKFLOW_TEST_REDIS_URL: redis://localhost:6379/15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: go test
+        run: go test -race -shuffle=on -count=1 ./...
+      - name: benchmark vẫn chạy được (không so số đo)
+        run: go test -run '^$' -bench . -benchtime 1x ./...
+
+  generated:
+    name: code sinh ra và tài liệu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: sqlc-dev/setup-sqlc@bac53b7fb28c039a6c7f5736fd1e89744021bdd6 # v5.0.0
+        with:
+          sqlc-version: "1.31.1"
+      - name: sqlc diff # sửa query, migration mà quên sqlc generate: đỏ
+        run: sqlc diff
+      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
+        with:
+          version: "1.75.0"
+          lint: true # buf lint cả khi push, mặc định chỉ chạy với PR
+          format: false
+          # breaking: mặc định chỉ với PR, so proto với nhánh đích của PR (Bài 49)
+          push: false # không đẩy lên Buf Schema Registry
+          pr_comment: false # cần quyền pull-requests: write
+      - name: redocly lint
+        working-directory: api # đọc redocly.yaml, .redocly.lint-ignore.yaml trong api/ (Bài 45, 46)
+        run: npx --yes @redocly/cli@2.80.0 lint openapi.yaml
+
+  vuln:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-input: "" # mặc định là "stable" và được ưu tiên hơn go-version-file
+          go-version-file: go.mod
+          go-package: ./...

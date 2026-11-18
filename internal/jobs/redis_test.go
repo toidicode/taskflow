@@ -91,18 +91,18 @@ func TestRedisQueue(t *testing.T) {
 	if err := q.Enqueue(ctx, "test:ok:v1", map[string]int{"n": 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := q.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { q.Stop(context.Background()) })
-
-	// cùng ID: lần hai bị từ chối
+	// cùng ID: lần hai bị từ chối. Phải thử trước q.Start(): test:ok:v1 không có Retention, worker
+	// chạy xong job đầu là asynq xóa nó và ID "cung-id" lại dùng được (test chập chờn, CI bắt được)
 	if err := q.Enqueue(ctx, "test:ok:v1", map[string]int{"n": 2}, jobs.ID("cung-id")); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.Enqueue(ctx, "test:ok:v1", map[string]int{"n": 3}, jobs.ID("cung-id")); !errors.Is(err, jobs.ErrDuplicate) {
 		t.Errorf("Enqueue trùng ID = %v, muốn ErrDuplicate", err)
 	}
+	if err := q.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Stop(context.Background()) })
 	for _, typ := range []string{"test:flaky:v1", "test:fail:v1", "test:skip:v1"} {
 		if err := q.Enqueue(ctx, typ, typ); err != nil {
 			t.Fatal(err)

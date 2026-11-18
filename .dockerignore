@@ -1,5 +1,6 @@
 # Không gửi vào build context: lịch sử git, file build và dữ liệu trên máy dev
 .git
+.github
 bin/
 uploads/
 tasks.json

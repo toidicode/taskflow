@@ -114,9 +114,17 @@ func projectEvents(projects *project.Service, rt Realtime) gin.HandlerFunc {
 
 // stream gửi message của sub tới conn và ping định kỳ cho tới khi một bên kết thúc.
 func (rt Realtime) stream(ctx context.Context, conn *websocket.Conn, sub *realtime.Subscription) {
-	// Client không gửi gì lên: CloseRead đọc trong goroutine riêng để xử lý pong và close frame,
-	// client gửi message thì đóng kết nối. ctx bị hủy khi kết nối đóng.
-	ctx = conn.CloseRead(ctx)
+	// Client không gửi gì lên: đọc trong goroutine riêng để xử lý pong và close frame, client gửi
+	// message thì đóng với 1008. ctx bị hủy khi kết nối đóng. Không dùng conn.CloseRead: ở coder/websocket
+	// v1.8.15, Close do goroutine của CloseRead gọi lại chờ chính goroutine đó, handler treo thêm 15 giây.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		defer cancel()
+		if _, _, err := conn.Reader(ctx); err == nil { // Reader vẫn tự trả lời ping, close frame
+			conn.Close(websocket.StatusPolicyViolation, "client không được gửi message")
+		}
+	}()
 	ping := time.NewTicker(orDefault(rt.PingInterval, 30*time.Second))
 	defer ping.Stop()
 

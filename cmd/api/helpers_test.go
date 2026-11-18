@@ -120,11 +120,12 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-// logEntries đọc từng dòng log JSON trong buf thành map.
+// logEntries đọc từng dòng log JSON trong buf thành map. Chỉ đọc bản sao các byte, không làm cạn buf:
+// cleanup của TestEndToEnd còn in lại toàn bộ log khi test lỗi.
 func logEntries(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	t.Helper()
 	var entries []map[string]any
-	dec := json.NewDecoder(buf)
+	dec := json.NewDecoder(bytes.NewReader(buf.Bytes()))
 	for dec.More() {
 		var e map[string]any
 		if err := dec.Decode(&e); err != nil {

@@ -95,6 +95,7 @@ func signUp(t *testing.T, srv *httptest.Server, name, email, password string) *c
 	return &client{t: t, srv: srv, token: tok.AccessToken}
 }
 
+// e2eLimits là giới hạn request khi chạy kịch bản: đủ rộng cho các bước bình thường,
 // riêng đăng nhập theo email chỉ 2 lần mỗi giờ để thử 429 (với 2 lần mỗi phút, token hồi lại sau 30 giây:
 // một lần chạy -race dưới tải nặng từng thấy lần đoán thứ ba được đi qua).
 var e2eLimits = Config{
@@ -249,7 +250,7 @@ func TestEndToEnd(t *testing.T) {
 			// log của WebSocket (status 101, ghi khi kết nối đóng) không chứa vé
 			requests.Wait()
 			ws := 0
-			for _, e := range logEntries(t, bytes.NewBuffer(logs.Bytes())) { // bản sao: không làm cạn logs
+			for _, e := range logEntries(t, logs) {
 				if e["status"] == 101.0 {
 					ws++
 					if p, _ := e["path"].(string); !strings.HasSuffix(p, "?ticket=REDACTED") {

@@ -1,0 +1,18 @@
+# Dependabot (Bài 53): mỗi tuần mở PR nâng version, CI chạy trên PR đó như mọi PR khác.
+version: 2
+updates:
+  - package-ecosystem: github-actions # cả SHA và comment "# vX.Y.Z" sau uses:
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-deps: # gộp thành một PR thay vì vài chục PR
+        patterns: ["*"]
+  - package-ecosystem: docker # image golang, distroless trong Dockerfile
+    directory: /
+    schedule:
+      interval: weekly

@@ -22,7 +22,7 @@ func HashPassword(password string) (string, error) {
 // kẻ tấn công không đo được email nào đã đăng ký.
 func CheckPassword(hash, password string) bool {
 	if hash == "" {
-		bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // chỉ để tốn thời gian như thật
 		return false
 	}
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil

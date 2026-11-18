@@ -217,7 +217,7 @@ type panicNotifier struct{ notify.Log }
 
 func (panicNotifier) TaskDone(context.Context, notify.TaskDone) error {
 	var m map[string]int
-	m["x"] = 1 // panic: assignment to entry in nil map
+	m["x"] = 1 //nolint:staticcheck // cố ý: panic: assignment to entry in nil map
 	return nil
 }
 

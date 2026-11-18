@@ -42,7 +42,9 @@ func serve(ctx context.Context, srv *http.Server, ln net.Listener, a *app, delay
 		srv.Close() // hết thời gian: cắt luôn các kết nối còn lại
 		errs = append(errs, fmt.Errorf("HTTP server: %w", err))
 	}
-	<-errc // Serve đã trả về http.ErrServerClosed
+	if err := <-errc; !errors.Is(err, http.ErrServerClosed) { // bình thường Serve trả về ErrServerClosed
+		errs = append(errs, fmt.Errorf("HTTP server: %w", err))
+	}
 	// chờ các WebSocket gửi close frame xong (Hub.Close đã được Shutdown gọi)
 	if err := a.hub.Wait(sctx); err != nil {
 		errs = append(errs, fmt.Errorf("WebSocket: %w", err))
@@ -97,7 +99,11 @@ func serveMetrics(addr string, h http.Handler, withPprof bool) (stop func(), err
 	}
 	// không có WriteTimeout: /debug/pprof/profile?seconds=30 ghi response sau 30 giây
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	go srv.Serve(ln)
+	go func() {
+		if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("server metrics dừng", "err", err)
+		}
+	}()
 	slog.Info("metrics cho Prometheus", "addr", ln.Addr().String(), "pprof", withPprof)
 	return func() { srv.Close() }, nil
 }
