@@ -506,6 +506,32 @@ func TestWriteJSONError(t *testing.T) {
 	}
 }
 
+// TestWriteJSONPool: buffer lấy lại từ pool (kể cả sau một lần mã hóa lỗi giữa chừng) không còn
+// dữ liệu cũ, body giống hệt json.Marshal + '\n' như trước Bài 52.
+func TestWriteJSONPool(t *testing.T) {
+	captureLog(t)
+	values := []any{
+		&task.Task{ID: 1, Title: "<b>Viết API</b> & test", Status: task.StatusDoing, Tags: []string{"go"}},
+		[]*task.Task{{ID: 2, Title: "dài", Description: strings.Repeat("x", 300<<10)}}, // > maxPooledBuf
+		&task.Task{ID: 3, Status: 7}, // lỗi giữa chừng
+		map[string]int{"n": 1},
+	}
+	for range 3 {
+		for _, v := range values {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			writeJSON(c, http.StatusOK, v)
+			want, err := json.Marshal(v)
+			if err != nil {
+				continue // đã kiểm tra ở TestWriteJSONError
+			}
+			if got := rec.Body.String(); got != string(want)+"\n" {
+				t.Errorf("body = %.80q, muốn %.80q", got, want)
+			}
+		}
+	}
+}
+
 // brokenTasks là task.Store luôn lỗi khi liệt kê, giả lập database mất kết nối.
 // Các method khác lấy từ interface nhúng (nil), test không được gọi tới.
 type brokenTasks struct{ task.Store }

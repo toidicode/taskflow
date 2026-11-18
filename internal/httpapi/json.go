@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,17 +21,33 @@ const maxBodyBytes = 1 << 20
 // errUnsupportedMediaType được trả về khi request không gửi Content-Type: application/json.
 var errUnsupportedMediaType = errors.New("Content-Type phải là application/json")
 
+// bufPool giữ các buffer đã dùng xong để response sau dùng lại, thay vì mỗi response cấp phát
+// một buffer mới cỡ cả body (Bài 52). Pool có thể bị GC dọn bất cứ lúc nào: chỉ là chỗ để tái sử dụng.
+var bufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+// maxPooledBuf: buffer lớn hơn mức này (một response rất lớn) không được trả về pool,
+// để một response hiếm hoi không giữ mãi một khối nhớ lớn.
+const maxPooledBuf = 256 << 10
+
 // writeJSON mã hóa v thành JSON rồi ghi ra response với status code cho trước.
 // Khác c.JSON của Gin: Content-Type đúng "application/json", body kết thúc bằng xuống dòng như
 // từ Bài 25, và lỗi mã hóa thành 500 thay vì một response dở dang.
 func writeJSON(c *gin.Context, status int, v any) {
-	// mã hóa trước khi ghi: lỗi thì vẫn kịp đổi sang 500 vì chưa gửi header nào
-	data, err := json.Marshal(v)
-	if err != nil {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer func() {
+		if buf.Cap() <= maxPooledBuf {
+			bufPool.Put(buf) // c.Data đã chép xong buf.Bytes() vào response, không ai giữ nó nữa
+		}
+	}()
+	// mã hóa trước khi ghi: lỗi thì vẫn kịp đổi sang 500 vì chưa gửi header nào.
+	// Encode thêm '\n' vào cuối, kết quả giống hệt json.Marshal + '\n' như trước
+	if err := json.NewEncoder(buf).Encode(v); err != nil {
 		slog.Error("writeJSON", "err", err)
-		status, data = http.StatusInternalServerError, []byte(`{"error":"lỗi máy chủ"}`)
+		c.Data(http.StatusInternalServerError, "application/json", []byte(`{"error":"lỗi máy chủ"}`+"\n"))
+		return
 	}
-	c.Data(status, "application/json", append(data, '\n'))
+	c.Data(status, "application/json", buf.Bytes())
 }
 
 // errorResponse là định dạng lỗi chung của API. Fields chỉ có ở lỗi validate:

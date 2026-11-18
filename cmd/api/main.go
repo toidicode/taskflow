@@ -163,7 +163,7 @@ func run(cfg Config) error {
 	}
 
 	if cfg.MetricsAddr != "" {
-		stopMetrics, err := serveMetrics(cfg.MetricsAddr, a.metrics.Handler())
+		stopMetrics, err := serveMetrics(cfg.MetricsAddr, a.metrics.Handler(), cfg.Pprof)
 		if err != nil {
 			return fmt.Errorf("metrics: %w", err)
 		}

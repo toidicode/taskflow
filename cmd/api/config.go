@@ -40,6 +40,7 @@ type Config struct {
 	NotifierAddr  string        // host:port của notifier gRPC (Bài 50), rỗng là ghi thông báo ra log
 	NotifierToken string        // token chung gửi kèm mỗi RPC tới notifier
 	MetricsAddr   string        // host:port phục vụ /metrics cho Prometheus (cổng riêng, không public), rỗng là tắt
+	Pprof         bool          // thêm /debug/pprof/ vào cổng metrics (cần MetricsAddr), mặc định tắt
 
 	RateAuthIP     ratelimit.Limit // đăng ký, đăng nhập: mỗi IP
 	RateLoginEmail ratelimit.Limit // đăng nhập: mỗi email, cộng dồn từ mọi IP
@@ -117,6 +118,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	env.str("TASKFLOW_NOTIFIER_ADDR", &cfg.NotifierAddr)
 	env.str("TASKFLOW_NOTIFIER_TOKEN", &cfg.NotifierToken)
 	env.str("TASKFLOW_METRICS_ADDR", &cfg.MetricsAddr)
+	env.bool("TASKFLOW_PPROF", &cfg.Pprof)
 	env.text("TASKFLOW_RATE_AUTH_IP", &cfg.RateAuthIP)
 	env.text("TASKFLOW_RATE_LOGIN_EMAIL", &cfg.RateLoginEmail)
 	env.text("TASKFLOW_RATE_USER", &cfg.RateUser)
@@ -147,6 +149,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.DurationVar(&cfg.CacheTTL, "cache-ttl", cfg.CacheTTL, "thời gian sống của dữ liệu trong cache (TASKFLOW_CACHE_TTL)")
 	fs.StringVar(&cfg.NotifierAddr, "notifier-addr", cfg.NotifierAddr, "host:port của notifier gRPC, rỗng: ghi thông báo ra log (TASKFLOW_NOTIFIER_ADDR)")
 	fs.StringVar(&cfg.MetricsAddr, "metrics-addr", cfg.MetricsAddr, "host:port phục vụ /metrics, rỗng: tắt (TASKFLOW_METRICS_ADDR)")
+	fs.BoolVar(&cfg.Pprof, "pprof", cfg.Pprof, "thêm /debug/pprof/ vào cổng metrics (TASKFLOW_PPROF)")
 	fs.TextVar(&cfg.RateAuthIP, "rate-auth-ip", cfg.RateAuthIP, "giới hạn đăng ký/đăng nhập mỗi IP, VD 10/1m hoặc off (TASKFLOW_RATE_AUTH_IP)")
 	fs.TextVar(&cfg.RateLoginEmail, "rate-login-email", cfg.RateLoginEmail, "giới hạn đăng nhập mỗi email (TASKFLOW_RATE_LOGIN_EMAIL)")
 	fs.TextVar(&cfg.RateUser, "rate-user", cfg.RateUser, "giới hạn request mỗi user đã đăng nhập (TASKFLOW_RATE_USER)")
@@ -195,6 +198,19 @@ func (e *envReader) int(key string, dst *int) {
 		return
 	}
 	*dst = n
+}
+
+func (e *envReader) bool(key string, dst *bool) {
+	v, ok := e.lookup(key)
+	if !ok {
+		return
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s=%q: cần true hoặc false", key, v))
+		return
+	}
+	*dst = b
 }
 
 func (e *envReader) duration(key string, dst *time.Duration) {
@@ -291,6 +307,8 @@ func (c Config) validate() error {
 		} else if c.MetricsAddr == c.Addr {
 			errs = append(errs, fmt.Errorf("metrics-addr %q: phải khác addr, /metrics không nằm trên cổng public", c.MetricsAddr))
 		}
+	} else if c.Pprof {
+		errs = append(errs, errors.New("pprof: cần đặt metrics-addr, pprof chỉ chạy trên cổng metrics"))
 	}
 	if c.ShutdownDelay < 0 {
 		errs = append(errs, fmt.Errorf("shutdown-delay %v: không được âm", c.ShutdownDelay))
@@ -338,6 +356,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("notifier_addr", c.NotifierAddr),
 		slog.String("notifier_token", hidden(c.NotifierToken)),
 		slog.String("metrics_addr", c.MetricsAddr),
+		slog.Bool("pprof", c.Pprof),
 		slog.String("rate_auth_ip", c.RateAuthIP.String()),
 		slog.String("rate_login_email", c.RateLoginEmail.String()),
 		slog.String("rate_user", c.RateUser.String()),

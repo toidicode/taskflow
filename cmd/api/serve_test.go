@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,5 +190,33 @@ func TestHealthcheck(t *testing.T) {
 	srv.Close()
 	if code := healthcheck(srv.Listener.Addr().String()); code != 1 {
 		t.Errorf("server đã tắt: exit code %d, muốn 1", code)
+	}
+}
+
+// TestPprof: addPprof đăng ký đủ các profile, kể cả CPU profile và goroutineleak (Go 1.27).
+func TestPprof(t *testing.T) {
+	mux := http.NewServeMux()
+	addPprof(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	for path, want := range map[string]string{
+		"/debug/pprof/":                  "goroutineleak",
+		"/debug/pprof/goroutine?debug=1": "goroutine profile: total",
+		"/debug/pprof/heap?debug=1":      "heap profile:",
+		"/debug/pprof/mutex?debug=1":     "--- mutex:",
+		"/debug/pprof/profile?seconds=1": "", // protobuf nén gzip, chỉ kiểm tra có dữ liệu
+		"/debug/pprof/trace?seconds=0.1": "",
+		"/debug/pprof/cmdline":           "",
+	} {
+		resp, err := srv.Client().Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || len(body) == 0 || !strings.Contains(string(body), want) {
+			t.Errorf("GET %s: %d, %d byte, muốn có %q", path, resp.StatusCode, len(body), want)
+		}
 	}
 }

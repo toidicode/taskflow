@@ -158,15 +158,21 @@ func (s *MemoryStore) Delete(ctx context.Context, id int) error {
 func (s *MemoryStore) List(ctx context.Context, f Filter) ([]Task, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	tasks := []Task{} // không phải nil slice: không có task thì JSON là [] thay vì null
-	for t := range maps.Values(s.tasks) {
+	// chỉ gom và sắp xếp ID rồi sao chép đúng các task được trả về, không sao chép và sắp xếp
+	// mọi Task khớp điều kiện (Bài 52: hai việc đó chiếm phần lớn CPU của GET /api/v1/tasks)
+	ids := make([]int, 0, len(s.tasks))
+	for id, t := range s.tasks {
 		if f.Match(t) && s.visible(f.VisibleTo, t) {
-			tasks = append(tasks, clone(t))
+			ids = append(ids, id)
 		}
 	}
-	slices.SortFunc(tasks, func(a, b Task) int { return cmp.Compare(a.ID, b.ID) })
-	if f.Limit > 0 && len(tasks) > f.Limit {
-		tasks = tasks[:f.Limit]
+	slices.Sort(ids)
+	if f.Limit > 0 && len(ids) > f.Limit {
+		ids = ids[:f.Limit]
+	}
+	tasks := make([]Task, 0, len(ids)) // không phải nil slice: không có task thì JSON là [] thay vì null
+	for _, id := range ids {
+		tasks = append(tasks, clone(s.tasks[id]))
 	}
 	return tasks, nil
 }

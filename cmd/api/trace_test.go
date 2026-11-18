@@ -141,7 +141,7 @@ func TestTracePropagation(t *testing.T) {
 				t.Fatalf("PATCH: %d", resp.StatusCode)
 			}
 
-			// chờ span server của notifier: chặng cuối của trace
+			// chờ các chặng cuối của trace (RPC tới notifier và job chứa nó)
 			byName := map[string]sdktrace.ReadOnlySpan{}
 			var sqlSpans []string
 			const rpc = "notify.v1.NotificationService/Send"
@@ -161,7 +161,9 @@ func TestTracePropagation(t *testing.T) {
 						sqlSpans = append(sqlSpans, s.Name())
 					}
 				}
-				return byName[rpc+" server"] != nil
+				// span chỉ vào rec khi kết thúc: server xong trước client và process, phải chờ cả ba
+				return byName[rpc+" server"] != nil && byName[rpc+" client"] != nil &&
+					byName["process notify:task_done:v1"] != nil
 			})
 
 			// mỗi chặng là con của chặng trước
@@ -215,10 +217,10 @@ func TestNoTraceForProbes(t *testing.T) {
 	}
 }
 
-// TestServeMetrics: /metrics nằm trên cổng riêng, không có trên cổng của API.
+// TestServeMetrics: /metrics và pprof nằm trên cổng riêng, không có trên cổng của API.
 func TestServeMetrics(t *testing.T) {
 	m := metrics.New()
-	stop, err := serveMetrics("127.0.0.1:0", m.Handler())
+	stop, err := serveMetrics("127.0.0.1:0", m.Handler(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,14 +230,14 @@ func TestServeMetrics(t *testing.T) {
 	srv := httptest.NewServer(a.handler(testTokens, "", nil))
 	defer srv.Close()
 
-	for _, path := range []string{"/health", "/api/v1/tasks/1", "/metrics"} {
+	for _, path := range []string{"/health", "/api/v1/tasks/1", "/metrics", "/debug/pprof/"} {
 		resp, err := srv.Client().Get(srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		resp.Body.Close()
-		if path == "/metrics" && resp.StatusCode != http.StatusNotFound {
-			t.Errorf("GET /metrics trên cổng API: %d, muốn 404", resp.StatusCode)
+		if (path == "/metrics" || path == "/debug/pprof/") && resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s trên cổng API: %d, muốn 404", path, resp.StatusCode)
 		}
 	}
 	rec := httptest.NewRecorder()
@@ -244,7 +246,7 @@ func TestServeMetrics(t *testing.T) {
 	for _, want := range []string{
 		`taskflow_http_requests_total{method="GET",route="/health",status="200"} 1`,
 		`taskflow_http_requests_total{method="GET",route="/api/v1/tasks/:id",status="401"} 1`,
-		`taskflow_http_requests_total{method="GET",route="unmatched",status="404"} 1`,
+		`taskflow_http_requests_total{method="GET",route="unmatched",status="404"} 2`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/metrics thiếu %s", want)

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof"
+	"runtime"
 	"time"
 )
 
@@ -81,16 +83,35 @@ func healthcheck(addr string) int {
 }
 
 // serveMetrics phục vụ h ở http://addr/metrics trên một cổng riêng: Prometheus gọi vào trong mạng
-// nội bộ, cổng này không đi qua Caddy nên người ngoài không đọc được. Trả về hàm đóng server.
-func serveMetrics(addr string, h http.Handler) (stop func(), err error) {
+// nội bộ, cổng này không đi qua Caddy nên người ngoài không đọc được. withPprof thêm các profile
+// của net/http/pprof dưới /debug/pprof/ trên cùng cổng đó. Trả về hàm đóng server.
+func serveMetrics(addr string, h http.Handler, withPprof bool) (stop func(), err error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", h)
+	if withPprof {
+		addPprof(mux)
+	}
+	// không có WriteTimeout: /debug/pprof/profile?seconds=30 ghi response sau 30 giây
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go srv.Serve(ln)
-	slog.Info("metrics cho Prometheus", "addr", ln.Addr().String())
+	slog.Info("metrics cho Prometheus", "addr", ln.Addr().String(), "pprof", withPprof)
 	return func() { srv.Close() }, nil
+}
+
+// addPprof đăng ký các handler của net/http/pprof lên mux. Import net/http/pprof cũng tự đăng ký
+// chúng lên http.DefaultServeMux, nhưng TaskFlow không phục vụ mux toàn cục đó ở cổng nào.
+func addPprof(mux *http.ServeMux) {
+	mux.HandleFunc("/debug/pprof/", pprof.Index) // trang danh sách + heap, goroutine, block, mutex...
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile) // CPU profile, mặc định 30 giây
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace) // execution trace
+	// block và mutex profile rỗng nếu không bật: trung bình một mẫu cho mỗi 1ms goroutine bị chặn,
+	// một mẫu cho mỗi 100 lần tranh chấp mutex. Thưa như vậy thì chi phí nhỏ, để bật lâu được
+	runtime.SetBlockProfileRate(int(time.Millisecond))
+	runtime.SetMutexProfileFraction(100)
 }
