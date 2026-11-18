@@ -17,6 +17,7 @@ import (
 	"github.com/toidicode/taskflow/internal/cache"
 	"github.com/toidicode/taskflow/internal/httpapi"
 	"github.com/toidicode/taskflow/internal/jobs"
+	"github.com/toidicode/taskflow/internal/metrics"
 	"github.com/toidicode/taskflow/internal/notify"
 	"github.com/toidicode/taskflow/internal/postgres"
 	"github.com/toidicode/taskflow/internal/project"
@@ -45,6 +46,7 @@ type app struct {
 	events      task.Publisher     // nơi task.Service gửi event: hub, hoặc Redis khi chạy nhiều bản
 	tickets     realtime.Tickets   // vé mở WebSocket
 	webDir      string             // dev: thư mục template dashboard, rỗng là dùng bản nhúng
+	metrics     *metrics.Metrics   // metric cho Prometheus, nil là tắt (test)
 }
 
 // taskService tạo task.Service từ các store của a.
@@ -68,6 +70,7 @@ func (a *app) handler(tokens *auth.Tokens, corsOrigin string, trusted []netip.Pr
 		RateLimit:   a.rateLimit,
 		Realtime:    httpapi.Realtime{Hub: a.hub, Tickets: a.tickets},
 		WebDir:      a.webDir,
+		Metrics:     a.metrics,
 	}, corsOrigin, trusted)
 }
 
@@ -214,23 +217,22 @@ const typeCleanOrphans = "attachment:clean_orphans:v1"
 // (nhắc deadline) trùng giờ ở mọi bản nên Unique bỏ các lần thừa; lịch @every (dọn file) tính từ
 // lúc mỗi bản khởi động nên không trùng giờ, chạy N lần mỗi chu kỳ, vô hại vì làm lại được.
 func (a *app) startJobs(cleanupEvery time.Duration, remindAt string) error {
-	for _, h := range notify.Handlers(a.notifier) {
-		a.queue.Handle(h)
-	}
-	a.queue.Handle(jobs.Handler{Type: typeCleanOrphans, Queue: jobs.QueueLow, MaxRetry: 3,
+	handlers := append(notify.Handlers(a.notifier), jobs.Handler{Type: typeCleanOrphans, Queue: jobs.QueueLow, MaxRetry: 3,
 		Timeout: 5 * time.Minute, Unique: 10 * time.Minute,
 		Run: func(ctx context.Context, _ []byte) error {
 			n, err := attachment.CleanOrphans(ctx, a.attachments, a.files, time.Now().Add(-orphanMinAge))
 			slog.Info("đã dọn file mồ côi", "removed", n)
 			return err
-		}})
-	a.queue.Handle(jobs.Handler{Type: task.TypeRemindDeadlines, Queue: jobs.QueueLow, MaxRetry: 3,
+		}}, jobs.Handler{Type: task.TypeRemindDeadlines, Queue: jobs.QueueLow, MaxRetry: 3,
 		Timeout: time.Minute, Unique: 10 * time.Minute,
 		Run: func(ctx context.Context, _ []byte) error {
 			n, err := a.taskService().RemindDeadlines(ctx, time.Now())
 			slog.Info("đã quét task sắp tới hạn", "reminded", n)
 			return err
 		}})
+	for _, h := range handlers {
+		a.queue.Handle(a.metrics.Job(h)) // đếm, đo mọi loại job; a.metrics nil thì giữ nguyên h
+	}
 
 	if cleanupEvery > 0 {
 		if err := a.queue.Schedule("@every "+cleanupEvery.String(), typeCleanOrphans); err != nil {

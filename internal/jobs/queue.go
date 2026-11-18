@@ -158,7 +158,10 @@ func (l *Local) Enqueue(ctx context.Context, typ string, payload any, opts ...Op
 	if id == "" {
 		id = rand.Text()
 	}
-	return l.d.Enqueue(Job{Name: typ, Run: func(ctx context.Context) error { return h.Run(withJobID(ctx, id), data) }})
+	_, span, headers := startSend(ctx, typ)
+	err = l.d.Enqueue(Job{Name: typ, Run: func(ctx context.Context) error { return run(ctx, h, id, headers, data) }})
+	endSpan(span, err)
+	return err
 }
 
 func (l *Local) Schedule(spec, typ string) error {

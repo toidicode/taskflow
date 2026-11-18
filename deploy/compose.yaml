@@ -82,6 +82,7 @@ services:
       TASKFLOW_REDIS_URL: redis://redis:6379/0
       TASKFLOW_NOTIFIER_ADDR: notifier:9090 # token: TASKFLOW_NOTIFIER_TOKEN trong .env
       TASKFLOW_TRUSTED_PROXIES: 10.39.0.10 # chỉ tin X-Forwarded-For do Caddy gửi
+      TASKFLOW_METRICS_ADDR: ":9464" # /metrics cho Prometheus (Bài 51), Caddy không chuyển tới cổng này
     volumes:
       - uploads:/data/uploads
     depends_on:

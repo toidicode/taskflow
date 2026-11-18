@@ -79,3 +79,18 @@ func healthcheck(addr string) int {
 	}
 	return 0
 }
+
+// serveMetrics phục vụ h ở http://addr/metrics trên một cổng riêng: Prometheus gọi vào trong mạng
+// nội bộ, cổng này không đi qua Caddy nên người ngoài không đọc được. Trả về hàm đóng server.
+func serveMetrics(addr string, h http.Handler) (stop func(), err error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", h)
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go srv.Serve(ln)
+	slog.Info("metrics cho Prometheus", "addr", ln.Addr().String())
+	return func() { srv.Close() }, nil
+}

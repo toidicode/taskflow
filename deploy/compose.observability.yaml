@@ -1,0 +1,46 @@
+# Quan sát TaskFlow (Bài 51): Jaeger nhận trace, Prometheus lấy metrics, Grafana vẽ biểu đồ.
+#   docker compose -f compose.yaml -f compose.observability.yaml up -d
+# Giao diện chỉ mở trên 127.0.0.1 của VPS, xem qua SSH tunnel:
+#   ssh -L 3000:127.0.0.1:3000 -L 16686:127.0.0.1:16686 user@vps
+
+services:
+  api: # thêm vào service api của compose.yaml
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: "0.1" # giữ 10% trace bắt đầu ở API, trace có cha thì theo quyết định của cha
+
+  notifier:
+    environment: # sampler mặc định parentbased_always_on: theo quyết định của API
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+
+  jaeger: # nhận trace qua OTLP (4317 gRPC, 4318 HTTP), giao diện ở 16686; lưu trong bộ nhớ
+    image: jaegertracing/jaeger:2.23.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:16686:16686"
+
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus:/prometheus
+
+  grafana:
+    image: grafana/grafana:13.2.6-slim
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?chưa đặt GRAFANA_PASSWORD trong .env}
+    volumes:
+      - ./observability/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/taskflow.yaml:ro
+      - grafana:/var/lib/grafana
+
+volumes:
+  prometheus:
+  grafana:

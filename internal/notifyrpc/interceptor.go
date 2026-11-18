@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc/filters"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
@@ -27,11 +29,13 @@ const (
 // healthPrefix: RPC health check được gọi không cần token (Docker, Kubernetes không gửi token).
 const healthPrefix = "/grpc.health.v1.Health/"
 
-// ServerOptions trả về option cho grpc.NewServer: interceptor log, recover, auth (theo thứ tự
+// ServerOptions trả về option cho grpc.NewServer: tracing, interceptor log, recover, auth (theo thứ tự
 // từ ngoài vào trong) và luật keepalive.
 func ServerOptions(logger *slog.Logger, token string) []grpc.ServerOption {
 	a := auth{token: []byte(token)}
 	return []grpc.ServerOption{
+		// span server cho mỗi RPC, nối vào trace của client; health check không cần trace
+		grpc.StatsHandler(otelgrpc.NewServerHandler(otelgrpc.WithFilter(filters.Not(filters.HealthCheck())))),
 		grpc.ChainUnaryInterceptor(logUnary(logger), recoverUnary(logger), a.unary),
 		grpc.ChainStreamInterceptor(logStream(logger), recoverStream(logger), a.stream),
 		// client ping nhanh hơn MinTime thì server đóng kết nối (GOAWAY "too_many_pings");

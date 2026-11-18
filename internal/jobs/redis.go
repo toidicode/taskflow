@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -33,6 +34,7 @@ type Redis struct {
 	client   *asynq.Client
 	server   *asynq.Server
 	sched    *asynq.Scheduler
+	inspect  *asynq.Inspector // đọc số job trong từng queue cho metrics
 	mux      *asynq.ServeMux
 	handlers map[string]Handler
 	opts     RedisOptions
@@ -59,7 +61,7 @@ func NewRedis(url string, opts RedisOptions) (*Redis, error) {
 	}
 	rdb := redis.NewClient(ropts)
 	r := &Redis{rdb: rdb, client: asynq.NewClientFromRedisClient(rdb), mux: asynq.NewServeMux(),
-		handlers: make(map[string]Handler), opts: opts}
+		inspect: asynq.NewInspectorFromRedisClient(rdb), handlers: make(map[string]Handler), opts: opts}
 	logger := asynqLogger{opts.Logger.With("component", "asynq")}
 	r.server = asynq.NewServerFromRedisClient(rdb, asynq.Config{
 		Concurrency: opts.Concurrency,
@@ -110,7 +112,7 @@ func (r *Redis) Handle(h Handler) {
 	r.handlers[h.Type] = h
 	r.mux.HandleFunc(h.Type, func(ctx context.Context, t *asynq.Task) error {
 		id, _ := asynq.GetTaskID(ctx)
-		return h.Run(withJobID(ctx, id), t.Payload())
+		return run(ctx, h, id, t.Headers(), t.Payload())
 	})
 }
 
@@ -140,13 +142,17 @@ func (r *Redis) Enqueue(ctx context.Context, typ string, payload any, opts ...Op
 	if id := Collect(opts).ID; id != "" {
 		aopts = append(aopts, asynq.TaskID(id))
 	}
+	ctx, span, headers := startSend(ctx, typ)
 	// Redis treo thì request gọi Enqueue chỉ chậm thêm tối đa EnqueueTimeout rồi nhận lỗi
 	ctx, cancel := context.WithTimeout(ctx, r.opts.EnqueueTimeout)
 	defer cancel()
-	_, err = r.client.EnqueueContext(ctx, asynq.NewTask(typ, data), aopts...)
+	// header của task (asynq v0.26) nằm cạnh payload trong Redis: trace context đi theo job
+	// mà không đổi định dạng payload
+	_, err = r.client.EnqueueContext(ctx, asynq.NewTaskWithHeaders(typ, data, headers), aopts...)
 	if errors.Is(err, asynq.ErrTaskIDConflict) {
-		return fmt.Errorf("%s: %w", typ, ErrDuplicate)
+		err = fmt.Errorf("%s: %w", typ, ErrDuplicate)
 	}
+	endSpan(span, err)
 	return err
 }
 
@@ -198,6 +204,33 @@ func (r *Redis) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return fmt.Errorf("asynq chưa dừng xong: %w", ctx.Err())
 	}
+}
+
+// QueueStats là số job theo trạng thái của một queue.
+type QueueStats struct {
+	Queue                                                  string // QueueCritical, QueueDefault, QueueLow
+	Pending, Active, Scheduled, Retry, Archived, Completed int
+}
+
+// Stats đọc số job theo trạng thái của các queue của r. Queue chưa từng có job thì không có trong kết quả.
+func (r *Redis) Stats() ([]QueueStats, error) {
+	existing, err := r.inspect.Queues()
+	if err != nil {
+		return nil, err
+	}
+	var out []QueueStats
+	for _, name := range []string{QueueCritical, QueueDefault, QueueLow} {
+		if !slices.Contains(existing, r.queue(name)) {
+			continue
+		}
+		info, err := r.inspect.GetQueueInfo(r.queue(name))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, QueueStats{Queue: name, Pending: info.Pending, Active: info.Active,
+			Scheduled: info.Scheduled, Retry: info.Retry, Archived: info.Archived, Completed: info.Completed})
+	}
+	return out, nil
 }
 
 // Ping kiểm tra kết nối tới Redis của hàng đợi.

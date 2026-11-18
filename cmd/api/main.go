@@ -21,9 +21,11 @@ import (
 	"github.com/toidicode/taskflow/internal/cache"
 	"github.com/toidicode/taskflow/internal/httpapi"
 	"github.com/toidicode/taskflow/internal/jobs"
+	"github.com/toidicode/taskflow/internal/metrics"
 	"github.com/toidicode/taskflow/internal/notify"
 	"github.com/toidicode/taskflow/internal/notifyrpc"
 	"github.com/toidicode/taskflow/internal/postgres"
+	"github.com/toidicode/taskflow/internal/telemetry"
 )
 
 func main() {
@@ -72,10 +74,25 @@ func run(cfg Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// tracing chỉ bật khi có OTEL_EXPORTER_OTLP_ENDPOINT. defer đầu tiên nên chạy sau cùng:
+	// span của lúc tắt server cũng được gửi đi
+	shutdownTracing, err := telemetry.Setup(ctx, "taskflow-api", buildVersion())
+	if err != nil {
+		return fmt.Errorf("tracing: %w", err)
+	}
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(sctx); err != nil {
+			slog.Warn("không gửi hết được trace", "err", err)
+		}
+	}()
+
 	a, err := openApp(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("khởi tạo store: %w", err)
 	}
+	a.metrics = metrics.New()
 	if a.db != nil {
 		defer func() {
 			a.db.Close()
@@ -90,6 +107,10 @@ func run(cfg Config) error {
 			return fmt.Errorf("redis: %w", err)
 		}
 		cached := useCache(a, rc, cfg.CacheTTL)
+		a.metrics.Cache("project", func() (int64, int64, int64) {
+			st := cached.Stats()
+			return st.Hits, st.Misses, st.Errors
+		})
 		defer func() { // chạy trước khi đóng database: defer chạy theo thứ tự ngược
 			st := cached.Stats()
 			slog.Info("thống kê cache project", "hits", st.Hits, "misses", st.Misses, "errors", st.Errors)
@@ -113,11 +134,13 @@ func run(cfg Config) error {
 	if cfg.RedisURL != "" {
 		// asynq chờ job đang chạy tối đa nửa thời gian tắt: lúc nó dừng, HTTP server đã dùng một phần,
 		// phần còn lại đủ để trả job chưa xong về hàng đợi trước khi hết TASKFLOW_SHUTDOWN_TIMEOUT
-		a.queue, err = jobs.NewRedis(cfg.RedisURL, jobs.RedisOptions{
+		q, err := jobs.NewRedis(cfg.RedisURL, jobs.RedisOptions{
 			Concurrency: cfg.Workers, ShutdownTimeout: cfg.ShutdownTimeout / 2})
 		if err != nil {
 			return fmt.Errorf("hàng đợi: %w", err)
 		}
+		a.queue = q
+		a.metrics.Queue(q.Stats) // số job pending, retry, archived... của từng queue
 		slog.Info("hàng đợi job trong Redis (asynq)")
 	} else {
 		a.queue = jobs.NewLocal(jobs.Options{Workers: cfg.Workers, QueueSize: cfg.QueueSize})
@@ -139,6 +162,14 @@ func run(cfg Config) error {
 		return fmt.Errorf("hàng đợi: %w", err)
 	}
 
+	if cfg.MetricsAddr != "" {
+		stopMetrics, err := serveMetrics(cfg.MetricsAddr, a.metrics.Handler())
+		if err != nil {
+			return fmt.Errorf("metrics: %w", err)
+		}
+		defer stopMetrics() // sau khi serve trả về: Prometheus vẫn lấy được metric trong lúc tắt
+	}
+
 	a.webDir = cfg.WebDir
 	tokens := auth.NewTokens([]byte(cfg.JWTSecret), cfg.JWTTTL)
 	trusted, _ := httpapi.ParseTrustedProxies(cfg.TrustedProxies) // đã kiểm tra trong loadConfig
@@ -155,10 +186,11 @@ func run(cfg Config) error {
 // newLogger tạo logger ghi ra w theo định dạng và mức log trong cfg.
 func newLogger(w io.Writer, cfg Config) *slog.Logger {
 	opts := &slog.HandlerOptions{Level: cfg.LogLevel}
+	var h slog.Handler = slog.NewTextHandler(w, opts)
 	if cfg.LogFormat == "json" {
-		return slog.New(slog.NewJSONHandler(w, opts))
+		h = slog.NewJSONHandler(w, opts)
 	}
-	return slog.New(slog.NewTextHandler(w, opts))
+	return slog.New(telemetry.LogHandler{Handler: h}) // log ghi với ctx của một span có thêm trace_id, span_id
 }
 
 // newServer tạo http.Server cho handler h với các timeout trong cfg.

@@ -10,9 +10,11 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	"github.com/toidicode/taskflow/internal/attachment"
 	"github.com/toidicode/taskflow/internal/auth"
+	"github.com/toidicode/taskflow/internal/metrics"
 	"github.com/toidicode/taskflow/internal/project"
 	"github.com/toidicode/taskflow/internal/storage"
 	"github.com/toidicode/taskflow/internal/task"
@@ -27,10 +29,11 @@ type Deps struct {
 	Attachments attachment.Store // thông tin file đính kèm
 	Files       storage.Storage  // nội dung file đính kèm
 	Tokens      *auth.Tokens
-	Ready       *Readiness // trả lời /ready
-	RateLimit   RateLimit  // giới hạn số request, Limiter nil là tắt
-	Realtime    Realtime   // WebSocket: hub và vé kết nối
-	WebDir      string     // dev: đọc template dashboard từ thư mục này, parse lại mỗi request
+	Ready       *Readiness       // trả lời /ready
+	RateLimit   RateLimit        // giới hạn số request, Limiter nil là tắt
+	Realtime    Realtime         // WebSocket: hub và vé kết nối
+	WebDir      string           // dev: đọc template dashboard từ thư mục này, parse lại mỗi request
+	Metrics     *metrics.Metrics // đếm, đo request cho Prometheus; nil là tắt
 }
 
 // New tạo handler của cả API: một *gin.Engine (cũng là http.Handler) với các middleware dùng chung,
@@ -41,14 +44,28 @@ func New(d Deps, corsOrigin string, trusted []netip.Prefix) http.Handler {
 	if corsOrigin != "" { // frontend gọi được API thì cũng mở được WebSocket
 		d.Realtime.origins = []string{corsOrigin}
 	}
-	r.Use( // Use phải đứng trước khi đăng ký route: route đăng ký trước đó không có middleware này
-		requestID,    // ngoài cùng: các middleware sau đều đọc được ID
+	// Use phải đứng trước khi đăng ký route: route đăng ký trước đó không có middleware này.
+	// Span của request mở ngoài cùng: log request và mọi việc phía trong đều nằm trong span.
+	// Chưa cấu hình OpenTelemetry thì span là no-op.
+	r.Use(otelgin.Middleware("taskflow-api", otelgin.WithGinFilter(notProbe)))
+	r.Use(requestID) // các middleware sau đều đọc được ID
+	if d.Metrics != nil {
+		r.Use(d.Metrics.Gin) // đếm cả response 500 do recoverPanic trả về
+	}
+	r.Use(
 		logRequests,  // log cả response 500 do recoverPanic trả về
 		recoverPanic, // bắt panic của mọi thứ phía trong
 		cors(corsOrigin),
 	)
 	routes(r, d)
 	return r
+}
+
+// notProbe bỏ qua trace của /health, /ready: Docker, load balancer hỏi vài giây một lần, trace
+// của chúng chỉ làm đầy backend. Metrics thì vẫn đếm.
+func notProbe(c *gin.Context) bool {
+	p := c.FullPath()
+	return p != "/health" && p != "/ready"
 }
 
 // newEngine tạo engine Gin chưa có middleware nào (gin.New, không phải gin.Default:

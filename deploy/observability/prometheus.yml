@@ -1,0 +1,8 @@
+# Prometheus lấy metrics của TaskFlow API (Bài 51) qua cổng riêng TASKFLOW_METRICS_ADDR, trong mạng của compose.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: taskflow-api
+    static_configs:
+      - targets: ["api:9464"]

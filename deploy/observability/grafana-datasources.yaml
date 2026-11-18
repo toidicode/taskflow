@@ -1,0 +1,10 @@
+# Grafana đọc file này lúc khởi động (provisioning): có sẵn nguồn dữ liệu Prometheus, không phải thêm bằng tay.
+# Không có Jaeger: datasource Jaeger của Grafana 13.2 vẫn gọi API cũ /api/services mà Jaeger 2.23 đã bỏ
+# (health check trả 404), nên xem trace ở giao diện của Jaeger (cổng 16686).
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    url: http://prometheus:9090
+    isDefault: true

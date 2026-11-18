@@ -27,10 +27,14 @@ import (
 	"github.com/toidicode/taskflow/internal/notify"
 	"github.com/toidicode/taskflow/internal/notifyrpc"
 	"github.com/toidicode/taskflow/internal/reqlog"
+	"github.com/toidicode/taskflow/internal/telemetry"
 )
 
 // shutdownTimeout: thời gian chờ các RPC đang chạy khi tắt.
 const shutdownTimeout = 5 * time.Second
+
+// version được gán lúc build bằng -ldflags "-X main.version=..." (Dockerfile), như cmd/api.
+var version string
 
 // minToken: token chung phải dài ít nhất chừng này, VD tạo bằng openssl rand -hex 32.
 const minToken = 32
@@ -52,12 +56,23 @@ func main() {
 		os.Exit(2)
 	}
 
-	// reqlog.Handler: dòng log nào ghi với ctx của RPC đều có request_id
-	logger := slog.New(reqlog.Handler{Handler: slog.NewTextHandler(os.Stderr, nil)})
+	// dòng log nào ghi với ctx của RPC đều có request_id (reqlog.Handler), trace_id và span_id (telemetry.LogHandler)
+	logger := slog.New(reqlog.Handler{Handler: telemetry.LogHandler{Handler: slog.NewTextHandler(os.Stderr, nil)}})
 	slog.SetDefault(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTracing, err := telemetry.Setup(ctx, "taskflow-notifier", version) // tắt khi chưa đặt OTEL_EXPORTER_OTLP_ENDPOINT
+	if err != nil {
+		slog.Error("tracing", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		shutdownTracing(sctx)
+	}()
 
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -66,7 +81,7 @@ func main() {
 	}
 	if err := run(ctx, lis, logger, token); err != nil {
 		slog.Error("notifier dừng vì lỗi", "err", err)
-		os.Exit(1)
+		os.Exit(1) // không chạy defer: mất các span chưa gửi, chấp nhận được khi đã lỗi
 	}
 	slog.Info("đã tắt notifier")
 }

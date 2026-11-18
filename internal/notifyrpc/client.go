@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -46,6 +47,8 @@ func Dial(target, token string, opts ...grpc.DialOption) (*grpc.ClientConn, erro
 		grpc.WithDefaultServiceConfig(serviceConfig),
 		// ping mỗi 30s khi có RPC đang chạy, 10s không có trả lời thì coi kết nối đã chết
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
+		// mỗi RPC là một span client, trace context đi sang notifier trong metadata (traceparent)
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithChainUnaryInterceptor(outgoingUnary(token), timeoutUnary(CallTimeout)),
 		grpc.WithChainStreamInterceptor(outgoingStream(token)),
 	}, opts...)

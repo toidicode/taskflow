@@ -39,6 +39,7 @@ type Config struct {
 	CacheTTL      time.Duration // thời gian sống của dữ liệu trong cache
 	NotifierAddr  string        // host:port của notifier gRPC (Bài 50), rỗng là ghi thông báo ra log
 	NotifierToken string        // token chung gửi kèm mỗi RPC tới notifier
+	MetricsAddr   string        // host:port phục vụ /metrics cho Prometheus (cổng riêng, không public), rỗng là tắt
 
 	RateAuthIP     ratelimit.Limit // đăng ký, đăng nhập: mỗi IP
 	RateLoginEmail ratelimit.Limit // đăng nhập: mỗi email, cộng dồn từ mọi IP
@@ -115,6 +116,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	env.duration("TASKFLOW_CACHE_TTL", &cfg.CacheTTL)
 	env.str("TASKFLOW_NOTIFIER_ADDR", &cfg.NotifierAddr)
 	env.str("TASKFLOW_NOTIFIER_TOKEN", &cfg.NotifierToken)
+	env.str("TASKFLOW_METRICS_ADDR", &cfg.MetricsAddr)
 	env.text("TASKFLOW_RATE_AUTH_IP", &cfg.RateAuthIP)
 	env.text("TASKFLOW_RATE_LOGIN_EMAIL", &cfg.RateLoginEmail)
 	env.text("TASKFLOW_RATE_USER", &cfg.RateUser)
@@ -144,6 +146,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.StringVar(&cfg.RemindAt, "remind-schedule", cfg.RemindAt, "lịch cron nhắc task sắp tới hạn, off: tắt (TASKFLOW_REMIND_SCHEDULE)")
 	fs.DurationVar(&cfg.CacheTTL, "cache-ttl", cfg.CacheTTL, "thời gian sống của dữ liệu trong cache (TASKFLOW_CACHE_TTL)")
 	fs.StringVar(&cfg.NotifierAddr, "notifier-addr", cfg.NotifierAddr, "host:port của notifier gRPC, rỗng: ghi thông báo ra log (TASKFLOW_NOTIFIER_ADDR)")
+	fs.StringVar(&cfg.MetricsAddr, "metrics-addr", cfg.MetricsAddr, "host:port phục vụ /metrics, rỗng: tắt (TASKFLOW_METRICS_ADDR)")
 	fs.TextVar(&cfg.RateAuthIP, "rate-auth-ip", cfg.RateAuthIP, "giới hạn đăng ký/đăng nhập mỗi IP, VD 10/1m hoặc off (TASKFLOW_RATE_AUTH_IP)")
 	fs.TextVar(&cfg.RateLoginEmail, "rate-login-email", cfg.RateLoginEmail, "giới hạn đăng nhập mỗi email (TASKFLOW_RATE_LOGIN_EMAIL)")
 	fs.TextVar(&cfg.RateUser, "rate-user", cfg.RateUser, "giới hạn request mỗi user đã đăng nhập (TASKFLOW_RATE_USER)")
@@ -282,6 +285,13 @@ func (c Config) validate() error {
 			errs = append(errs, fmt.Errorf("TASKFLOW_NOTIFIER_TOKEN: cần ít nhất %d byte khi đặt notifier-addr", minNotifierToken))
 		}
 	}
+	if c.MetricsAddr != "" {
+		if _, _, err := net.SplitHostPort(c.MetricsAddr); err != nil {
+			errs = append(errs, fmt.Errorf("metrics-addr %q: cần dạng host:port, VD :9464", c.MetricsAddr))
+		} else if c.MetricsAddr == c.Addr {
+			errs = append(errs, fmt.Errorf("metrics-addr %q: phải khác addr, /metrics không nằm trên cổng public", c.MetricsAddr))
+		}
+	}
 	if c.ShutdownDelay < 0 {
 		errs = append(errs, fmt.Errorf("shutdown-delay %v: không được âm", c.ShutdownDelay))
 	}
@@ -327,6 +337,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("cache_ttl", c.CacheTTL.String()),
 		slog.String("notifier_addr", c.NotifierAddr),
 		slog.String("notifier_token", hidden(c.NotifierToken)),
+		slog.String("metrics_addr", c.MetricsAddr),
 		slog.String("rate_auth_ip", c.RateAuthIP.String()),
 		slog.String("rate_login_email", c.RateLoginEmail.String()),
 		slog.String("rate_user", c.RateUser.String()),

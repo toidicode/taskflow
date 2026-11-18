@@ -76,6 +76,9 @@ func TestLoadConfig(t *testing.T) {
 				return c.RateAuthIP == ratelimit.Limit{N: 20, Period: time.Minute} &&
 					c.RateLoginEmail == ratelimit.Limit{N: 3, Period: 15 * time.Minute} && !c.RateUser.Enabled()
 			}},
+		{"metrics", []string{"-metrics-addr", "127.0.0.1:9464"},
+			map[string]string{"TASKFLOW_METRICS_ADDR": ":9100", "TASKFLOW_JWT_SECRET": testJWTSecret},
+			func(c Config) bool { return c.MetricsAddr == "127.0.0.1:9464" }},
 		{"-healthcheck không cần secret", []string{"-healthcheck"}, map[string]string{"TASKFLOW_ADDR": ":9000"},
 			func(c Config) bool { return c.HealthCheck && c.Addr == ":9000" }},
 	}
@@ -125,6 +128,10 @@ func TestLoadConfigErrors(t *testing.T) {
 		{"rate limit sai", []string{"-rate-user", "nhiều"},
 			map[string]string{"TASKFLOW_RATE_AUTH_IP": "10", "TASKFLOW_JWT_SECRET": testJWTSecret},
 			[]string{`TASKFLOW_RATE_AUTH_IP: "10": cần dạng số-request/thời-gian như 10/1m, hoặc off`}},
+		{"metrics sai", []string{"-metrics-addr", "9464"}, map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
+			[]string{`metrics-addr "9464": cần dạng host:port`}},
+		{"metrics trùng cổng API", []string{"-metrics-addr", ":8080"}, map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
+			[]string{`metrics-addr ":8080": phải khác addr`}},
 		{"notifier sai", []string{"-notifier-addr", "notifier"},
 			map[string]string{"TASKFLOW_NOTIFIER_TOKEN": "ngan", "TASKFLOW_JWT_SECRET": testJWTSecret},
 			[]string{`notifier-addr "notifier": cần dạng host:port`, "TASKFLOW_NOTIFIER_TOKEN: cần ít nhất 32 byte"}},
@@ -168,6 +175,7 @@ func TestConfigLogValue(t *testing.T) {
 	cfg.RedisURL = "redis://:redis-bi-mat@cache:6379/0"
 	cfg.NotifierAddr = "notifier:9090"
 	cfg.NotifierToken = "notifier-token-bi-mat-0123456789abcdef"
+	cfg.MetricsAddr = ":9464"
 
 	var buf bytes.Buffer
 	newLogger(&buf, Config{LogFormat: "json"}).Info("đã đọc cấu hình", "config", cfg)
@@ -175,7 +183,7 @@ func TestConfigLogValue(t *testing.T) {
 	if strings.Contains(buf.String(), "bi-mat") {
 		t.Errorf("log lộ mật khẩu: %s", buf.String())
 	}
-	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`, `"remind_schedule":"0 * * * *"`, `"shutdown_timeout":"8s"`, `"redis_url":"[đã ẩn]"`, `"cache_ttl":"1m0s"`, `"rate_auth_ip":"10/1m"`, `"rate_login_email":"5/10m"`, `"rate_user":"600/1m"`, `"notifier_addr":"notifier:9090"`, `"notifier_token":"[đã ẩn]"`} {
+	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`, `"remind_schedule":"0 * * * *"`, `"shutdown_timeout":"8s"`, `"redis_url":"[đã ẩn]"`, `"cache_ttl":"1m0s"`, `"rate_auth_ip":"10/1m"`, `"rate_login_email":"5/10m"`, `"rate_user":"600/1m"`, `"notifier_addr":"notifier:9090"`, `"notifier_token":"[đã ẩn]"`, `"metrics_addr":":9464"`} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("log thiếu %s: %s", want, buf.String())
 		}
