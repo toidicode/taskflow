@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,7 +66,7 @@ func Collect(opts []Option) EnqueueOptions {
 }
 
 // ID đặt ID cho job: bản Redis từ chối job trùng ID với job còn trong hàng đợi (kể cả job đã xong
-// còn trong thời gian Retention) bằng ErrDuplicate. Bản Local bỏ qua ID.
+// còn trong thời gian Retention) bằng ErrDuplicate. Bản Local không chặn trùng, chỉ dùng ID cho JobID.
 func ID(id string) Option {
 	return func(o *EnqueueOptions) { o.ID = id }
 }
@@ -77,6 +78,19 @@ var (
 	// Chính là asynq.SkipRetry nên errors.Is dùng được với cả hai bản.
 	SkipRetry = asynq.SkipRetry
 )
+
+type jobIDKey struct{}
+
+func withJobID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, jobIDKey{}, id)
+}
+
+// JobID trả về ID của job đang chạy (trong Handler.Run): giữ nguyên qua mọi lần chạy lại của
+// cùng một job, nên dùng làm khóa chống gửi trùng được. Rỗng khi ctx không phải của job.
+func JobID(ctx context.Context) string {
+	id, _ := ctx.Value(jobIDKey{}).(string)
+	return id
+}
 
 // marshal mã hóa payload, nil thành payload rỗng.
 func marshal(typ string, payload any) ([]byte, error) {
@@ -140,7 +154,11 @@ func (l *Local) Enqueue(ctx context.Context, typ string, payload any, opts ...Op
 	if err != nil {
 		return err
 	}
-	return l.d.Enqueue(Job{Name: typ, Run: func(ctx context.Context) error { return h.Run(ctx, data) }})
+	id := Collect(opts).ID
+	if id == "" {
+		id = rand.Text()
+	}
+	return l.d.Enqueue(Job{Name: typ, Run: func(ctx context.Context) error { return h.Run(withJobID(ctx, id), data) }})
 }
 
 func (l *Local) Schedule(spec, typ string) error {

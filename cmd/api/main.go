@@ -22,6 +22,7 @@ import (
 	"github.com/toidicode/taskflow/internal/httpapi"
 	"github.com/toidicode/taskflow/internal/jobs"
 	"github.com/toidicode/taskflow/internal/notify"
+	"github.com/toidicode/taskflow/internal/notifyrpc"
 	"github.com/toidicode/taskflow/internal/postgres"
 )
 
@@ -122,7 +123,18 @@ func run(cfg Config) error {
 		a.queue = jobs.NewLocal(jobs.Options{Workers: cfg.Workers, QueueSize: cfg.QueueSize})
 		slog.Warn("chưa đặt TASKFLOW_REDIS_URL: hàng đợi job trong bộ nhớ, mất job khi tắt server")
 	}
-	a.notifier = notify.Log{Logger: slog.Default()} // chưa có email: thông báo chỉ ghi ra log
+	if cfg.NotifierAddr != "" {
+		// một ClientConn cho cả process, dùng chung cho mọi worker; đóng sau khi serve đã dừng hàng đợi
+		conn, err := notifyrpc.Dial(cfg.NotifierAddr, cfg.NotifierToken)
+		if err != nil {
+			return fmt.Errorf("notifier: %w", err)
+		}
+		defer conn.Close()
+		a.notifier = notifyrpc.NewNotifier(conn)
+		slog.Info("gửi thông báo qua notifier gRPC", "addr", cfg.NotifierAddr)
+	} else {
+		a.notifier = notify.Log{Logger: slog.Default()} // không có notifier: thông báo chỉ ghi ra log
+	}
 	if err := a.startJobs(cfg.CleanupEvery, cfg.RemindAt); err != nil {
 		return fmt.Errorf("hàng đợi: %w", err)
 	}

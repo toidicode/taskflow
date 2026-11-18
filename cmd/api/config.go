@@ -20,23 +20,25 @@ import (
 
 // Config là toàn bộ cấu hình của TaskFlow API.
 type Config struct {
-	Addr         string        // địa chỉ lắng nghe, dạng host:port
-	CORSOrigin   string        // origin của frontend, rỗng là tắt CORS
-	LogLevel     slog.Level    // debug, info, warn hoặc error
-	LogFormat    string        // text (dễ đọc khi dev) hoặc json (cho production)
-	ReadTimeout  time.Duration // đọc xong cả request
-	WriteTimeout time.Duration // ghi xong response
-	IdleTimeout  time.Duration // giữ kết nối keep-alive
-	DatabaseURL  string        // chuỗi kết nối PostgreSQL (chứa mật khẩu), rỗng là dùng store trong bộ nhớ
-	JWTSecret    string        // secret ký access token, ai có nó là ký được token của mọi user
-	JWTTTL       time.Duration // thời gian sống của access token
-	UploadDir    string        // thư mục lưu file upload
-	Workers      int           // số worker chạy việc nền
-	QueueSize    int           // số việc nền chờ tối đa
-	CleanupEvery time.Duration // chu kỳ dọn file mồ côi, 0 là tắt
-	RemindAt     string        // lịch cron của job nhắc task sắp tới hạn, "off" là tắt
-	RedisURL     string        // chuỗi kết nối Redis cho cache (có thể chứa mật khẩu), rỗng là không cache
-	CacheTTL     time.Duration // thời gian sống của dữ liệu trong cache
+	Addr          string        // địa chỉ lắng nghe, dạng host:port
+	CORSOrigin    string        // origin của frontend, rỗng là tắt CORS
+	LogLevel      slog.Level    // debug, info, warn hoặc error
+	LogFormat     string        // text (dễ đọc khi dev) hoặc json (cho production)
+	ReadTimeout   time.Duration // đọc xong cả request
+	WriteTimeout  time.Duration // ghi xong response
+	IdleTimeout   time.Duration // giữ kết nối keep-alive
+	DatabaseURL   string        // chuỗi kết nối PostgreSQL (chứa mật khẩu), rỗng là dùng store trong bộ nhớ
+	JWTSecret     string        // secret ký access token, ai có nó là ký được token của mọi user
+	JWTTTL        time.Duration // thời gian sống của access token
+	UploadDir     string        // thư mục lưu file upload
+	Workers       int           // số worker chạy việc nền
+	QueueSize     int           // số việc nền chờ tối đa
+	CleanupEvery  time.Duration // chu kỳ dọn file mồ côi, 0 là tắt
+	RemindAt      string        // lịch cron của job nhắc task sắp tới hạn, "off" là tắt
+	RedisURL      string        // chuỗi kết nối Redis cho cache (có thể chứa mật khẩu), rỗng là không cache
+	CacheTTL      time.Duration // thời gian sống của dữ liệu trong cache
+	NotifierAddr  string        // host:port của notifier gRPC (Bài 50), rỗng là ghi thông báo ra log
+	NotifierToken string        // token chung gửi kèm mỗi RPC tới notifier
 
 	RateAuthIP     ratelimit.Limit // đăng ký, đăng nhập: mỗi IP
 	RateLoginEmail ratelimit.Limit // đăng nhập: mỗi email, cộng dồn từ mọi IP
@@ -53,6 +55,9 @@ type Config struct {
 
 // minJWTSecret là độ dài tối thiểu của JWTSecret: HS256 cần khóa ít nhất 256 bit.
 const minJWTSecret = 32
+
+// minNotifierToken là độ dài tối thiểu của NotifierToken, bằng minToken của cmd/notifier.
+const minNotifierToken = 32
 
 // defaultConfig trả về cấu hình mặc định, đủ để chạy trên máy dev.
 func defaultConfig() Config {
@@ -108,6 +113,8 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	env.str("TASKFLOW_REMIND_SCHEDULE", &cfg.RemindAt)
 	env.str("TASKFLOW_REDIS_URL", &cfg.RedisURL)
 	env.duration("TASKFLOW_CACHE_TTL", &cfg.CacheTTL)
+	env.str("TASKFLOW_NOTIFIER_ADDR", &cfg.NotifierAddr)
+	env.str("TASKFLOW_NOTIFIER_TOKEN", &cfg.NotifierToken)
 	env.text("TASKFLOW_RATE_AUTH_IP", &cfg.RateAuthIP)
 	env.text("TASKFLOW_RATE_LOGIN_EMAIL", &cfg.RateLoginEmail)
 	env.text("TASKFLOW_RATE_USER", &cfg.RateUser)
@@ -136,6 +143,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.DurationVar(&cfg.CleanupEvery, "cleanup-interval", cfg.CleanupEvery, "chu kỳ dọn file mồ côi, 0: tắt (TASKFLOW_CLEANUP_INTERVAL)")
 	fs.StringVar(&cfg.RemindAt, "remind-schedule", cfg.RemindAt, "lịch cron nhắc task sắp tới hạn, off: tắt (TASKFLOW_REMIND_SCHEDULE)")
 	fs.DurationVar(&cfg.CacheTTL, "cache-ttl", cfg.CacheTTL, "thời gian sống của dữ liệu trong cache (TASKFLOW_CACHE_TTL)")
+	fs.StringVar(&cfg.NotifierAddr, "notifier-addr", cfg.NotifierAddr, "host:port của notifier gRPC, rỗng: ghi thông báo ra log (TASKFLOW_NOTIFIER_ADDR)")
 	fs.TextVar(&cfg.RateAuthIP, "rate-auth-ip", cfg.RateAuthIP, "giới hạn đăng ký/đăng nhập mỗi IP, VD 10/1m hoặc off (TASKFLOW_RATE_AUTH_IP)")
 	fs.TextVar(&cfg.RateLoginEmail, "rate-login-email", cfg.RateLoginEmail, "giới hạn đăng nhập mỗi email (TASKFLOW_RATE_LOGIN_EMAIL)")
 	fs.TextVar(&cfg.RateUser, "rate-user", cfg.RateUser, "giới hạn request mỗi user đã đăng nhập (TASKFLOW_RATE_USER)")
@@ -143,7 +151,7 @@ func loadConfig(args []string, lookup func(string) (string, bool), output io.Wri
 	fs.DurationVar(&cfg.ShutdownDelay, "shutdown-delay", cfg.ShutdownDelay, "chờ sau khi /ready trả 503, trước khi ngừng nhận kết nối (TASKFLOW_SHUTDOWN_DELAY)")
 	fs.StringVar(&cfg.TrustedProxies, "trusted-proxies", cfg.TrustedProxies, "IP/CIDR của reverse proxy, cách nhau bởi dấu phẩy (TASKFLOW_TRUSTED_PROXIES)")
 	fs.StringVar(&cfg.WebDir, "web-dir", cfg.WebDir, "chỉ khi dev: thư mục template dashboard, VD internal/httpapi/web (TASKFLOW_WEB_DIR)")
-	// DatabaseURL, JWTSecret, RedisURL cố ý không có flag: tham số dòng lệnh lộ ra trong ps
+	// DatabaseURL, JWTSecret, RedisURL, NotifierToken cố ý không có flag: tham số dòng lệnh lộ ra trong ps
 	// Migrate chỉ có flag: là một lệnh chạy một lần chứ không phải cấu hình lâu dài
 	fs.BoolVar(&cfg.Migrate, "migrate", false, "chạy migration database rồi thoát")
 	fs.BoolVar(&cfg.HealthCheck, "healthcheck", false, "kiểm tra /ready của server đang chạy rồi thoát (cho HEALTHCHECK của Docker)")
@@ -266,6 +274,14 @@ func (c Config) validate() error {
 			errs = append(errs, fmt.Errorf("TASKFLOW_REDIS_URL: %w", err))
 		}
 	}
+	if c.NotifierAddr != "" {
+		if _, _, err := net.SplitHostPort(c.NotifierAddr); err != nil {
+			errs = append(errs, fmt.Errorf("notifier-addr %q: cần dạng host:port, VD notifier:9090", c.NotifierAddr))
+		}
+		if len(c.NotifierToken) < minNotifierToken {
+			errs = append(errs, fmt.Errorf("TASKFLOW_NOTIFIER_TOKEN: cần ít nhất %d byte khi đặt notifier-addr", minNotifierToken))
+		}
+	}
 	if c.ShutdownDelay < 0 {
 		errs = append(errs, fmt.Errorf("shutdown-delay %v: không được âm", c.ShutdownDelay))
 	}
@@ -282,7 +298,7 @@ func (c Config) validate() error {
 }
 
 // LogValue quyết định Config hiện ra thế nào trong log (Config cài slog.LogValuer).
-// DatabaseURL, JWTSecret và RedisURL là bí mật nên chỉ cho biết đã đặt hay chưa.
+// DatabaseURL, JWTSecret, RedisURL và NotifierToken là bí mật nên chỉ cho biết đã đặt hay chưa.
 func (c Config) LogValue() slog.Value {
 	hidden := func(s string) string {
 		if s == "" {
@@ -309,6 +325,8 @@ func (c Config) LogValue() slog.Value {
 		slog.String("web_dir", c.WebDir),
 		slog.String("redis_url", hidden(c.RedisURL)),
 		slog.String("cache_ttl", c.CacheTTL.String()),
+		slog.String("notifier_addr", c.NotifierAddr),
+		slog.String("notifier_token", hidden(c.NotifierToken)),
 		slog.String("rate_auth_ip", c.RateAuthIP.String()),
 		slog.String("rate_login_email", c.RateLoginEmail.String()),
 		slog.String("rate_user", c.RateUser.String()),

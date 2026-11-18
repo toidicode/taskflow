@@ -26,27 +26,12 @@ const (
 // request (không phải gin.Context): service nhận c.Request.Context() nên log cũng có ID.
 func requestID(c *gin.Context) {
 	id := c.GetHeader("X-Request-ID")
-	if !validRequestID(id) {
+	if !reqlog.Valid(id) {
 		id = rand.Text()
 	}
 	c.Header("X-Request-ID", id)
 	c.Request = c.Request.WithContext(reqlog.WithID(c.Request.Context(), id))
 	c.Next()
-}
-
-// validRequestID chỉ chấp nhận ID từ 1 tới 64 ký tự chữ, số, '-' hoặc '_',
-// để client không chèn được ký tự lạ (VD xuống dòng) vào log.
-func validRequestID(id string) bool {
-	if id == "" || len(id) > 64 {
-		return false
-	}
-	for _, c := range id {
-		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_'
-		if !ok {
-			return false
-		}
-	}
-	return true
 }
 
 // requestLogger trả về logger mặc định gắn sẵn request_id của request,

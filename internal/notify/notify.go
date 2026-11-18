@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/toidicode/taskflow/internal/jobs"
+	"github.com/toidicode/taskflow/internal/reqlog"
 )
 
 // Tên loại job gửi thông báo. Payload là JSON của TaskDone, Deadline: chỉ được thêm field
@@ -26,6 +27,9 @@ type TaskDone struct {
 	Title  string `json:"title"`
 	DoneBy int    `json:"done_by"` // user đã chuyển task sang done
 	To     []int  `json:"to"`      // người nhận: chủ project và người được giao, trừ DoneBy
+	// RequestID của request HTTP đã chuyển task sang done (Bài 50): job chạy với ctx mang ID này,
+	// nên log của job và của notifier có cùng request_id với log của request.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // Deadline là thông báo "task sắp tới hạn".
@@ -48,7 +52,12 @@ type Notifier interface {
 func Handlers(n Notifier) []jobs.Handler {
 	return []jobs.Handler{
 		{Type: TypeTaskDone, Queue: jobs.QueueDefault, MaxRetry: 10, Timeout: 30 * time.Second,
-			Run: decode(n.TaskDone)},
+			Run: decode(func(ctx context.Context, d TaskDone) error {
+				if d.RequestID != "" {
+					ctx = reqlog.WithID(ctx, d.RequestID)
+				}
+				return n.TaskDone(ctx, d)
+			})},
 		// Retention 25 giờ: trong thời gian đó, đưa lại job nhắc cùng task, cùng hạn (cùng ID) bị từ chối
 		{Type: TypeDeadline, Queue: jobs.QueueDefault, MaxRetry: 10, Timeout: 30 * time.Second,
 			Retention: 25 * time.Hour, Run: decode(n.Deadline)},

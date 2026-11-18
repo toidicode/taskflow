@@ -125,6 +125,9 @@ func TestLoadConfigErrors(t *testing.T) {
 		{"rate limit sai", []string{"-rate-user", "nhiều"},
 			map[string]string{"TASKFLOW_RATE_AUTH_IP": "10", "TASKFLOW_JWT_SECRET": testJWTSecret},
 			[]string{`TASKFLOW_RATE_AUTH_IP: "10": cần dạng số-request/thời-gian như 10/1m, hoặc off`}},
+		{"notifier sai", []string{"-notifier-addr", "notifier"},
+			map[string]string{"TASKFLOW_NOTIFIER_TOKEN": "ngan", "TASKFLOW_JWT_SECRET": testJWTSecret},
+			[]string{`notifier-addr "notifier": cần dạng host:port`, "TASKFLOW_NOTIFIER_TOKEN: cần ít nhất 32 byte"}},
 		{"tắt server sai", []string{"-shutdown-timeout", "0s", "-shutdown-delay", "-1s"},
 			map[string]string{"TASKFLOW_JWT_SECRET": testJWTSecret},
 			[]string{"shutdown-timeout 0s: phải lớn hơn 0", "shutdown-delay -1s: không được âm"}},
@@ -163,6 +166,8 @@ func TestConfigLogValue(t *testing.T) {
 	cfg.DatabaseURL = "postgres://taskflow:mat-khau-bi-mat@db:5432/taskflow"
 	cfg.JWTSecret = "jwt-secret-bi-mat-jwt-secret-bi-mat"
 	cfg.RedisURL = "redis://:redis-bi-mat@cache:6379/0"
+	cfg.NotifierAddr = "notifier:9090"
+	cfg.NotifierToken = "notifier-token-bi-mat-0123456789abcdef"
 
 	var buf bytes.Buffer
 	newLogger(&buf, Config{LogFormat: "json"}).Info("đã đọc cấu hình", "config", cfg)
@@ -170,7 +175,7 @@ func TestConfigLogValue(t *testing.T) {
 	if strings.Contains(buf.String(), "bi-mat") {
 		t.Errorf("log lộ mật khẩu: %s", buf.String())
 	}
-	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`, `"remind_schedule":"0 * * * *"`, `"shutdown_timeout":"8s"`, `"redis_url":"[đã ẩn]"`, `"cache_ttl":"1m0s"`, `"rate_auth_ip":"10/1m"`, `"rate_login_email":"5/10m"`, `"rate_user":"600/1m"`} {
+	for _, want := range []string{`"addr":":8080"`, `"database_url":"[đã ẩn]"`, `"jwt_secret":"[đã ẩn]"`, `"jwt_ttl":"15m0s"`, `"upload_dir":"uploads"`, `"workers":4`, `"cleanup_interval":"1h0m0s"`, `"remind_schedule":"0 * * * *"`, `"shutdown_timeout":"8s"`, `"redis_url":"[đã ẩn]"`, `"cache_ttl":"1m0s"`, `"rate_auth_ip":"10/1m"`, `"rate_login_email":"5/10m"`, `"rate_user":"600/1m"`, `"notifier_addr":"notifier:9090"`, `"notifier_token":"[đã ẩn]"`} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("log thiếu %s: %s", want, buf.String())
 		}

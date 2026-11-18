@@ -286,6 +286,9 @@ func noAssignee(t *Task) error {
 // lưu xong, mất một thông báo không đáng để trả lỗi cho client.
 func (s *Service) notifyDone(ctx context.Context, userID int, t Task, p project.Project) {
 	n := notify.TaskDone{TaskID: t.ID, Title: t.Title, DoneBy: userID}
+	if id := reqlog.ID(ctx); id != "-" {
+		n.RequestID = id // job chạy sau, ở chỗ khác: mang theo request ID trong payload
+	}
 	for _, id := range []int{p.OwnerID, t.AssigneeID} {
 		if id > 0 && id != userID && !slices.Contains(n.To, id) {
 			n.To = append(n.To, id)

@@ -1,5 +1,5 @@
-# TaskFlow API trên VPS: PostgreSQL + Redis + migration + API + Caddy (HTTPS).
-# Deploy: docker compose pull migrate api && docker compose run --rm migrate && docker compose up -d
+# TaskFlow API trên VPS: PostgreSQL + Redis + migration + API + notifier (gRPC) + Caddy (HTTPS).
+# Deploy: docker compose pull migrate api notifier && docker compose run --rm migrate && docker compose up -d
 
 # giới hạn log của mọi container: tối đa 3 file x 10 MB
 x-logging: &logging
@@ -56,6 +56,23 @@ services:
     restart: "no"
     logging: *logging
 
+  notifier: # notification service gRPC (Bài 49-50), cùng image với API
+    image: ghcr.io/toidicode/taskflow-api:${TASKFLOW_VERSION}
+    entrypoint: ["/notifier"]
+    restart: unless-stopped
+    environment:
+      TASKFLOW_NOTIFIER_TOKEN: ${TASKFLOW_NOTIFIER_TOKEN:?chưa đặt TASKFLOW_NOTIFIER_TOKEN trong .env}
+      TZ: ${TZ:-UTC}
+    healthcheck: # grpc.health.v1.Health/Check, không cần token
+      test: ["CMD", "/notifier", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+      start_interval: 1s
+    stop_grace_period: 10s # > shutdownTimeout (5s) của notifier
+    logging: *logging # không có "ports": chỉ các service trong mạng này gọi được
+
   api:
     image: ghcr.io/toidicode/taskflow-api:${TASKFLOW_VERSION}
     restart: unless-stopped
@@ -63,6 +80,7 @@ services:
     environment:
       DATABASE_URL: postgres://taskflow:${POSTGRES_PASSWORD}@db:5432/taskflow?sslmode=disable
       TASKFLOW_REDIS_URL: redis://redis:6379/0
+      TASKFLOW_NOTIFIER_ADDR: notifier:9090 # token: TASKFLOW_NOTIFIER_TOKEN trong .env
       TASKFLOW_TRUSTED_PROXIES: 10.39.0.10 # chỉ tin X-Forwarded-For do Caddy gửi
     volumes:
       - uploads:/data/uploads
@@ -73,6 +91,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      notifier: # không bắt buộc: notifier chưa lên thì job thông báo lỗi và được chạy lại sau
+        condition: service_started
     healthcheck: # như HEALTHCHECK trong image, hỏi dày hơn
       test: ["CMD", "/api", "-healthcheck"]
       interval: 10s

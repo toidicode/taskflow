@@ -83,6 +83,9 @@ type SendRequest struct {
 	TaskId  int64   `protobuf:"varint,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	Title   string  `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
 	Channel Channel `protobuf:"varint,4,opt,name=channel,proto3,enum=notify.v1.Channel" json:"channel,omitempty"`
+	// Khóa chống gửi trùng (Bài 50): cùng khóa thì server chỉ gửi một lần, nên client gọi lại
+	// Send an toàn. TaskFlow dùng ID của job. Rỗng: không chống trùng.
+	IdempotencyKey string `protobuf:"bytes,5,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	// Loại thông báo: đúng một trong các field dưới đây.
 	//
 	// Types that are valid to be assigned to Event:
@@ -150,6 +153,13 @@ func (x *SendRequest) GetChannel() Channel {
 		return x.Channel
 	}
 	return Channel_CHANNEL_UNSPECIFIED
+}
+
+func (x *SendRequest) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
 }
 
 func (x *SendRequest) GetEvent() isSendRequest_Event {
@@ -287,7 +297,9 @@ func (x *Deadline) GetDueDate() *timestamppb.Timestamp {
 type SendResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Số người nhận đã gửi được.
-	Delivered     int32 `protobuf:"varint,1,opt,name=delivered,proto3" json:"delivered,omitempty"`
+	Delivered int32 `protobuf:"varint,1,opt,name=delivered,proto3" json:"delivered,omitempty"`
+	// true: khóa idempotency_key đã gửi trước đó, lần này server không gửi lại.
+	Duplicate     bool `protobuf:"varint,2,opt,name=duplicate,proto3" json:"duplicate,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -329,16 +341,273 @@ func (x *SendResponse) GetDelivered() int32 {
 	return 0
 }
 
+func (x *SendResponse) GetDuplicate() bool {
+	if x != nil {
+		return x.Duplicate
+	}
+	return false
+}
+
+type SendBatchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Request       *SendRequest           `protobuf:"bytes,1,opt,name=request,proto3" json:"request,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SendBatchRequest) Reset() {
+	*x = SendBatchRequest{}
+	mi := &file_notify_v1_notify_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendBatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendBatchRequest) ProtoMessage() {}
+
+func (x *SendBatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_notify_v1_notify_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendBatchRequest.ProtoReflect.Descriptor instead.
+func (*SendBatchRequest) Descriptor() ([]byte, []int) {
+	return file_notify_v1_notify_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *SendBatchRequest) GetRequest() *SendRequest {
+	if x != nil {
+		return x.Request
+	}
+	return nil
+}
+
+type SendBatchResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Số request đã nhận và tổng số người nhận đã gửi được.
+	Requests      int32 `protobuf:"varint,1,opt,name=requests,proto3" json:"requests,omitempty"`
+	Delivered     int32 `protobuf:"varint,2,opt,name=delivered,proto3" json:"delivered,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SendBatchResponse) Reset() {
+	*x = SendBatchResponse{}
+	mi := &file_notify_v1_notify_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendBatchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendBatchResponse) ProtoMessage() {}
+
+func (x *SendBatchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_notify_v1_notify_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendBatchResponse.ProtoReflect.Descriptor instead.
+func (*SendBatchResponse) Descriptor() ([]byte, []int) {
+	return file_notify_v1_notify_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *SendBatchResponse) GetRequests() int32 {
+	if x != nil {
+		return x.Requests
+	}
+	return 0
+}
+
+func (x *SendBatchResponse) GetDelivered() int32 {
+	if x != nil {
+		return x.Delivered
+	}
+	return 0
+}
+
+type WatchRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Chỉ nhận thông báo gửi tới user này; 0 là mọi user.
+	UserId        int64 `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchRequest) Reset() {
+	*x = WatchRequest{}
+	mi := &file_notify_v1_notify_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchRequest) ProtoMessage() {}
+
+func (x *WatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_notify_v1_notify_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchRequest.ProtoReflect.Descriptor instead.
+func (*WatchRequest) Descriptor() ([]byte, []int) {
+	return file_notify_v1_notify_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *WatchRequest) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+// WatchResponse là một thông báo đã gửi tới một người nhận.
+type WatchResponse struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	UserId int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	TaskId int64                  `protobuf:"varint,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Title  string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
+	// Types that are valid to be assigned to Event:
+	//
+	//	*WatchResponse_TaskDone
+	//	*WatchResponse_Deadline
+	Event         isWatchResponse_Event `protobuf_oneof:"event"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchResponse) Reset() {
+	*x = WatchResponse{}
+	mi := &file_notify_v1_notify_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchResponse) ProtoMessage() {}
+
+func (x *WatchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_notify_v1_notify_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchResponse.ProtoReflect.Descriptor instead.
+func (*WatchResponse) Descriptor() ([]byte, []int) {
+	return file_notify_v1_notify_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *WatchResponse) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *WatchResponse) GetTaskId() int64 {
+	if x != nil {
+		return x.TaskId
+	}
+	return 0
+}
+
+func (x *WatchResponse) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *WatchResponse) GetEvent() isWatchResponse_Event {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+func (x *WatchResponse) GetTaskDone() *TaskDone {
+	if x != nil {
+		if x, ok := x.Event.(*WatchResponse_TaskDone); ok {
+			return x.TaskDone
+		}
+	}
+	return nil
+}
+
+func (x *WatchResponse) GetDeadline() *Deadline {
+	if x != nil {
+		if x, ok := x.Event.(*WatchResponse_Deadline); ok {
+			return x.Deadline
+		}
+	}
+	return nil
+}
+
+type isWatchResponse_Event interface {
+	isWatchResponse_Event()
+}
+
+type WatchResponse_TaskDone struct {
+	TaskDone *TaskDone `protobuf:"bytes,10,opt,name=task_done,json=taskDone,proto3,oneof"`
+}
+
+type WatchResponse_Deadline struct {
+	Deadline *Deadline `protobuf:"bytes,11,opt,name=deadline,proto3,oneof"`
+}
+
+func (*WatchResponse_TaskDone) isWatchResponse_Event() {}
+
+func (*WatchResponse_Deadline) isWatchResponse_Event() {}
+
 var File_notify_v1_notify_proto protoreflect.FileDescriptor
 
 const file_notify_v1_notify_proto_rawDesc = "" +
 	"\n" +
-	"\x16notify/v1/notify.proto\x12\tnotify.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf5\x01\n" +
+	"\x16notify/v1/notify.proto\x12\tnotify.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x9e\x02\n" +
 	"\vSendRequest\x12\x19\n" +
 	"\buser_ids\x18\x01 \x03(\x03R\auserIds\x12\x17\n" +
 	"\atask_id\x18\x02 \x01(\x03R\x06taskId\x12\x14\n" +
 	"\x05title\x18\x03 \x01(\tR\x05title\x12,\n" +
-	"\achannel\x18\x04 \x01(\x0e2\x12.notify.v1.ChannelR\achannel\x122\n" +
+	"\achannel\x18\x04 \x01(\x0e2\x12.notify.v1.ChannelR\achannel\x12'\n" +
+	"\x0fidempotency_key\x18\x05 \x01(\tR\x0eidempotencyKey\x122\n" +
 	"\ttask_done\x18\n" +
 	" \x01(\v2\x13.notify.v1.TaskDoneH\x00R\btaskDone\x121\n" +
 	"\bdeadline\x18\v \x01(\v2\x13.notify.v1.DeadlineH\x00R\bdeadlineB\a\n" +
@@ -346,15 +615,33 @@ const file_notify_v1_notify_proto_rawDesc = "" +
 	"\bTaskDone\x12\x17\n" +
 	"\adone_by\x18\x01 \x01(\x03R\x06doneBy\"A\n" +
 	"\bDeadline\x125\n" +
-	"\bdue_date\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\adueDate\",\n" +
+	"\bdue_date\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\adueDate\"J\n" +
 	"\fSendResponse\x12\x1c\n" +
-	"\tdelivered\x18\x01 \x01(\x05R\tdelivered*F\n" +
+	"\tdelivered\x18\x01 \x01(\x05R\tdelivered\x12\x1c\n" +
+	"\tduplicate\x18\x02 \x01(\bR\tduplicate\"D\n" +
+	"\x10SendBatchRequest\x120\n" +
+	"\arequest\x18\x01 \x01(\v2\x16.notify.v1.SendRequestR\arequest\"M\n" +
+	"\x11SendBatchResponse\x12\x1a\n" +
+	"\brequests\x18\x01 \x01(\x05R\brequests\x12\x1c\n" +
+	"\tdelivered\x18\x02 \x01(\x05R\tdelivered\"'\n" +
+	"\fWatchRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\"\xc7\x01\n" +
+	"\rWatchResponse\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x17\n" +
+	"\atask_id\x18\x02 \x01(\x03R\x06taskId\x12\x14\n" +
+	"\x05title\x18\x03 \x01(\tR\x05title\x122\n" +
+	"\ttask_done\x18\n" +
+	" \x01(\v2\x13.notify.v1.TaskDoneH\x00R\btaskDone\x121\n" +
+	"\bdeadline\x18\v \x01(\v2\x13.notify.v1.DeadlineH\x00R\bdeadlineB\a\n" +
+	"\x05event*F\n" +
 	"\aChannel\x12\x17\n" +
 	"\x13CHANNEL_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vCHANNEL_LOG\x10\x01\x12\x11\n" +
-	"\rCHANNEL_EMAIL\x10\x022N\n" +
+	"\rCHANNEL_EMAIL\x10\x022\xd6\x01\n" +
 	"\x13NotificationService\x127\n" +
-	"\x04Send\x12\x16.notify.v1.SendRequest\x1a\x17.notify.v1.SendResponseB?Z=github.com/toidicode/taskflow/internal/gen/notify/v1;notifyv1b\x06proto3"
+	"\x04Send\x12\x16.notify.v1.SendRequest\x1a\x17.notify.v1.SendResponse\x12H\n" +
+	"\tSendBatch\x12\x1b.notify.v1.SendBatchRequest\x1a\x1c.notify.v1.SendBatchResponse(\x01\x12<\n" +
+	"\x05Watch\x12\x17.notify.v1.WatchRequest\x1a\x18.notify.v1.WatchResponse0\x01B?Z=github.com/toidicode/taskflow/internal/gen/notify/v1;notifyv1b\x06proto3"
 
 var (
 	file_notify_v1_notify_proto_rawDescOnce sync.Once
@@ -369,27 +656,38 @@ func file_notify_v1_notify_proto_rawDescGZIP() []byte {
 }
 
 var file_notify_v1_notify_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_notify_v1_notify_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_notify_v1_notify_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_notify_v1_notify_proto_goTypes = []any{
 	(Channel)(0),                  // 0: notify.v1.Channel
 	(*SendRequest)(nil),           // 1: notify.v1.SendRequest
 	(*TaskDone)(nil),              // 2: notify.v1.TaskDone
 	(*Deadline)(nil),              // 3: notify.v1.Deadline
 	(*SendResponse)(nil),          // 4: notify.v1.SendResponse
-	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
+	(*SendBatchRequest)(nil),      // 5: notify.v1.SendBatchRequest
+	(*SendBatchResponse)(nil),     // 6: notify.v1.SendBatchResponse
+	(*WatchRequest)(nil),          // 7: notify.v1.WatchRequest
+	(*WatchResponse)(nil),         // 8: notify.v1.WatchResponse
+	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
 }
 var file_notify_v1_notify_proto_depIdxs = []int32{
-	0, // 0: notify.v1.SendRequest.channel:type_name -> notify.v1.Channel
-	2, // 1: notify.v1.SendRequest.task_done:type_name -> notify.v1.TaskDone
-	3, // 2: notify.v1.SendRequest.deadline:type_name -> notify.v1.Deadline
-	5, // 3: notify.v1.Deadline.due_date:type_name -> google.protobuf.Timestamp
-	1, // 4: notify.v1.NotificationService.Send:input_type -> notify.v1.SendRequest
-	4, // 5: notify.v1.NotificationService.Send:output_type -> notify.v1.SendResponse
-	5, // [5:6] is the sub-list for method output_type
-	4, // [4:5] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	0,  // 0: notify.v1.SendRequest.channel:type_name -> notify.v1.Channel
+	2,  // 1: notify.v1.SendRequest.task_done:type_name -> notify.v1.TaskDone
+	3,  // 2: notify.v1.SendRequest.deadline:type_name -> notify.v1.Deadline
+	9,  // 3: notify.v1.Deadline.due_date:type_name -> google.protobuf.Timestamp
+	1,  // 4: notify.v1.SendBatchRequest.request:type_name -> notify.v1.SendRequest
+	2,  // 5: notify.v1.WatchResponse.task_done:type_name -> notify.v1.TaskDone
+	3,  // 6: notify.v1.WatchResponse.deadline:type_name -> notify.v1.Deadline
+	1,  // 7: notify.v1.NotificationService.Send:input_type -> notify.v1.SendRequest
+	5,  // 8: notify.v1.NotificationService.SendBatch:input_type -> notify.v1.SendBatchRequest
+	7,  // 9: notify.v1.NotificationService.Watch:input_type -> notify.v1.WatchRequest
+	4,  // 10: notify.v1.NotificationService.Send:output_type -> notify.v1.SendResponse
+	6,  // 11: notify.v1.NotificationService.SendBatch:output_type -> notify.v1.SendBatchResponse
+	8,  // 12: notify.v1.NotificationService.Watch:output_type -> notify.v1.WatchResponse
+	10, // [10:13] is the sub-list for method output_type
+	7,  // [7:10] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_notify_v1_notify_proto_init() }
@@ -401,13 +699,17 @@ func file_notify_v1_notify_proto_init() {
 		(*SendRequest_TaskDone)(nil),
 		(*SendRequest_Deadline)(nil),
 	}
+	file_notify_v1_notify_proto_msgTypes[7].OneofWrappers = []any{
+		(*WatchResponse_TaskDone)(nil),
+		(*WatchResponse_Deadline)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_notify_v1_notify_proto_rawDesc), len(file_notify_v1_notify_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

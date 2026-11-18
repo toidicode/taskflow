@@ -12,6 +12,12 @@ option go_package = "github.com/toidicode/taskflow/internal/gen/notify/v1;notify
 service NotificationService {
   // Send gửi một thông báo tới mọi user trong user_ids.
   rpc Send(SendRequest) returns (SendResponse);
+  // SendBatch (client streaming): client gửi nhiều thông báo trên một stream, đóng stream
+  // thì server trả một response tổng kết (Bài 50).
+  rpc SendBatch(stream SendBatchRequest) returns (SendBatchResponse);
+  // Watch (server streaming): server đẩy mọi thông báo đã gửi thành công tới client
+  // cho tới khi client hủy (Bài 50).
+  rpc Watch(WatchRequest) returns (stream WatchResponse);
 }
 
 // Channel là kênh gửi thông báo.
@@ -28,6 +34,9 @@ message SendRequest {
   int64 task_id = 2;
   string title = 3;
   Channel channel = 4;
+  // Khóa chống gửi trùng (Bài 50): cùng khóa thì server chỉ gửi một lần, nên client gọi lại
+  // Send an toàn. TaskFlow dùng ID của job. Rỗng: không chống trùng.
+  string idempotency_key = 5;
 
   // Loại thông báo: đúng một trong các field dưới đây.
   oneof event {
@@ -50,4 +59,32 @@ message Deadline {
 message SendResponse {
   // Số người nhận đã gửi được.
   int32 delivered = 1;
+  // true: khóa idempotency_key đã gửi trước đó, lần này server không gửi lại.
+  bool duplicate = 2;
+}
+
+message SendBatchRequest {
+  SendRequest request = 1;
+}
+
+message SendBatchResponse {
+  // Số request đã nhận và tổng số người nhận đã gửi được.
+  int32 requests = 1;
+  int32 delivered = 2;
+}
+
+message WatchRequest {
+  // Chỉ nhận thông báo gửi tới user này; 0 là mọi user.
+  int64 user_id = 1;
+}
+
+// WatchResponse là một thông báo đã gửi tới một người nhận.
+message WatchResponse {
+  int64 user_id = 1;
+  int64 task_id = 2;
+  string title = 3;
+  oneof event {
+    TaskDone task_done = 10;
+    Deadline deadline = 11;
+  }
 }

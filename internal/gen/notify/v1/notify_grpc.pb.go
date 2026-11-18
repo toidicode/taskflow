@@ -22,7 +22,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NotificationService_Send_FullMethodName = "/notify.v1.NotificationService/Send"
+	NotificationService_Send_FullMethodName      = "/notify.v1.NotificationService/Send"
+	NotificationService_SendBatch_FullMethodName = "/notify.v1.NotificationService/SendBatch"
+	NotificationService_Watch_FullMethodName     = "/notify.v1.NotificationService/Watch"
 )
 
 // NotificationServiceClient is the client API for NotificationService service.
@@ -33,6 +35,12 @@ const (
 type NotificationServiceClient interface {
 	// Send gửi một thông báo tới mọi user trong user_ids.
 	Send(ctx context.Context, in *SendRequest, opts ...grpc.CallOption) (*SendResponse, error)
+	// SendBatch (client streaming): client gửi nhiều thông báo trên một stream, đóng stream
+	// thì server trả một response tổng kết (Bài 50).
+	SendBatch(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[SendBatchRequest, SendBatchResponse], error)
+	// Watch (server streaming): server đẩy mọi thông báo đã gửi thành công tới client
+	// cho tới khi client hủy (Bài 50).
+	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
 }
 
 type notificationServiceClient struct {
@@ -53,6 +61,38 @@ func (c *notificationServiceClient) Send(ctx context.Context, in *SendRequest, o
 	return out, nil
 }
 
+func (c *notificationServiceClient) SendBatch(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[SendBatchRequest, SendBatchResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &NotificationService_ServiceDesc.Streams[0], NotificationService_SendBatch_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SendBatchRequest, SendBatchResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type NotificationService_SendBatchClient = grpc.ClientStreamingClient[SendBatchRequest, SendBatchResponse]
+
+func (c *notificationServiceClient) Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &NotificationService_ServiceDesc.Streams[1], NotificationService_Watch_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchRequest, WatchResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type NotificationService_WatchClient = grpc.ServerStreamingClient[WatchResponse]
+
 // NotificationServiceServer is the server API for NotificationService service.
 // All implementations must embed UnimplementedNotificationServiceServer
 // for forward compatibility.
@@ -61,6 +101,12 @@ func (c *notificationServiceClient) Send(ctx context.Context, in *SendRequest, o
 type NotificationServiceServer interface {
 	// Send gửi một thông báo tới mọi user trong user_ids.
 	Send(context.Context, *SendRequest) (*SendResponse, error)
+	// SendBatch (client streaming): client gửi nhiều thông báo trên một stream, đóng stream
+	// thì server trả một response tổng kết (Bài 50).
+	SendBatch(grpc.ClientStreamingServer[SendBatchRequest, SendBatchResponse]) error
+	// Watch (server streaming): server đẩy mọi thông báo đã gửi thành công tới client
+	// cho tới khi client hủy (Bài 50).
+	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
 	mustEmbedUnimplementedNotificationServiceServer()
 }
 
@@ -73,6 +119,12 @@ type UnimplementedNotificationServiceServer struct{}
 
 func (UnimplementedNotificationServiceServer) Send(context.Context, *SendRequest) (*SendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Send not implemented")
+}
+func (UnimplementedNotificationServiceServer) SendBatch(grpc.ClientStreamingServer[SendBatchRequest, SendBatchResponse]) error {
+	return status.Error(codes.Unimplemented, "method SendBatch not implemented")
+}
+func (UnimplementedNotificationServiceServer) Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error {
+	return status.Error(codes.Unimplemented, "method Watch not implemented")
 }
 func (UnimplementedNotificationServiceServer) mustEmbedUnimplementedNotificationServiceServer() {}
 func (UnimplementedNotificationServiceServer) testEmbeddedByValue()                             {}
@@ -113,6 +165,24 @@ func _NotificationService_Send_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NotificationService_SendBatch_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(NotificationServiceServer).SendBatch(&grpc.GenericServerStream[SendBatchRequest, SendBatchResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type NotificationService_SendBatchServer = grpc.ClientStreamingServer[SendBatchRequest, SendBatchResponse]
+
+func _NotificationService_Watch_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(NotificationServiceServer).Watch(m, &grpc.GenericServerStream[WatchRequest, WatchResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type NotificationService_WatchServer = grpc.ServerStreamingServer[WatchResponse]
+
 // NotificationService_ServiceDesc is the grpc.ServiceDesc for NotificationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -125,6 +195,17 @@ var NotificationService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _NotificationService_Send_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "SendBatch",
+			Handler:       _NotificationService_SendBatch_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Watch",
+			Handler:       _NotificationService_Watch_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "notify/v1/notify.proto",
 }

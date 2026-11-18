@@ -109,7 +109,8 @@ func (r *Redis) queue(name string) string {
 func (r *Redis) Handle(h Handler) {
 	r.handlers[h.Type] = h
 	r.mux.HandleFunc(h.Type, func(ctx context.Context, t *asynq.Task) error {
-		return h.Run(ctx, t.Payload())
+		id, _ := asynq.GetTaskID(ctx)
+		return h.Run(withJobID(ctx, id), t.Payload())
 	})
 }
 
